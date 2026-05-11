@@ -1,5 +1,4 @@
 import torch
-from torch.distributions import Categorical
 
 from cxval.models import ActorCritic
 
@@ -45,6 +44,6 @@ class Agent:
         obs = obs.unsqueeze(0)  # (1, input_size)
 
         logits, value, self.hidden = self.actor_critic.step(obs, self.hidden)
-        dist = Categorical(logits=logits)
+        dist = self.actor_critic.make_dist(logits)
         action = dist.sample()
         return action.item(), dist.log_prob(action), value

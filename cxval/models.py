@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from torch.distributions import Categorical
 
 
 class RNN(nn.Module):
@@ -9,6 +10,7 @@ class RNN(nn.Module):
         input_size,
         hidden_size,
         output_size,
+        recurrent_gain=0.9,
         input_plastic=True,
         hidden_plastic=True,
         output_plastic=True,
@@ -19,6 +21,10 @@ class RNN(nn.Module):
             input_size: Dimensionality of the input at each time step.
             hidden_size: Number of recurrent units.
             output_size: Dimensionality of the readout.
+            recurrent_gain: Spectral radius of the initial recurrent weight matrix.
+                h2h is initialised with orthogonal weights scaled to this value.
+                Values < 1 give a contractive recurrence; 0.9 is a safe default
+                for long sequences with ReLU nonlinearity.
             input_plastic: Whether input weights are trainable.
             hidden_plastic: Whether recurrent weights are trainable.
             output_plastic: Whether readout weights are trainable.
@@ -28,6 +34,7 @@ class RNN(nn.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
+        self.recurrent_gain = recurrent_gain
         self.nonlinearity = nn.ReLU()
 
         self.input2h = nn.Linear(input_size, hidden_size)
@@ -41,11 +48,13 @@ class RNN(nn.Module):
         self._initialize_weights()
 
     def _initialize_weights(self):
-        """Initialise linear layer weights with Kaiming normal, biases to zero."""
-        for layer in [self.input2h, self.h2h, self.h2o]:
+        """Kaiming init for input/output layers; orthogonal init for h2h."""
+        for layer in [self.input2h, self.h2o]:
             nn.init.kaiming_normal_(layer.weight)
             if layer.bias is not None:
                 nn.init.zeros_(layer.bias)
+        nn.init.orthogonal_(self.h2h.weight, gain=self.recurrent_gain)
+        nn.init.zeros_(self.h2h.bias)
 
     def init_hidden(self, batch_size, device):
         """Return a zero initial hidden state.
@@ -106,6 +115,7 @@ class LeakyRNN(RNN):
         hidden_size,
         output_size,
         alpha,
+        recurrent_gain=0.9,
         input_plastic=True,
         hidden_plastic=True,
         output_plastic=True,
@@ -120,6 +130,7 @@ class LeakyRNN(RNN):
             hidden_size: Number of recurrent units.
             output_size: Dimensionality of the readout.
             alpha: Leak rate in (0, 1]; equivalent to dt/tau.
+            recurrent_gain: Spectral radius for orthogonal h2h initialisation.
             input_plastic: Whether input weights are trainable.
             hidden_plastic: Whether recurrent weights are trainable.
             output_plastic: Whether readout weights are trainable.
@@ -128,6 +139,7 @@ class LeakyRNN(RNN):
             input_size=input_size,
             hidden_size=hidden_size,
             output_size=output_size,
+            recurrent_gain=recurrent_gain,
             input_plastic=input_plastic,
             hidden_plastic=hidden_plastic,
             output_plastic=output_plastic,
@@ -326,11 +338,27 @@ class ActorCritic(nn.Module):
         num_actions: Number of discrete actions for the policy head.
     """
 
-    def __init__(self, backbone: RNN, num_actions: int):
+    def __init__(self, backbone: RNN, num_actions: int, policy_clip: float = 0.0):
         super().__init__()
         self.backbone = backbone
         self.policy_head = nn.Linear(backbone.hidden_size, num_actions)
         self.value_head = nn.Linear(backbone.hidden_size, 1)
+        self.policy_clip = policy_clip
+
+    def make_dist(self, logits):
+        """Build a Categorical distribution from logits, optionally clamping probabilities.
+
+        When policy_clip > 0, action probabilities are clamped to
+        [policy_clip, 1 - policy_clip] and renormalised before sampling.
+        This prevents any action from reaching probability 0 and ensures
+        ongoing exploration even after many gradient updates.
+        """
+        if self.policy_clip > 0.0:
+            probs = torch.softmax(logits, dim=-1)
+            probs = probs.clamp(min=self.policy_clip)
+            probs = probs / probs.sum(dim=-1, keepdim=True)
+            return Categorical(probs=probs)
+        return Categorical(logits=logits)
 
     def forward(self, x, hidden=None):
         """Run the backbone and compute policy logits and value estimates.

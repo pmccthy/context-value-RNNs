@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import sys
 import warnings
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -157,12 +158,12 @@ def weights_nan(model: nn.Module) -> bool:
 
 def run_one(hidden_size: int, rank: int | None, seed: int, device: torch.device) -> dict:
     nan_row = dict(
-        held_out_r=np.nan,
+        held_out_r=np.nan, held_out_r_swap_to_anchor=np.nan,
         ccgp_ridge_anchor=np.nan, ccgp_ridge_swap=np.nan,
         ccgp_bin_anchor=np.nan,   ccgp_bin_swap=np.nan,
         rsa_identity_r=np.nan,    rsa_value_r=np.nan,
         spearman_r=np.nan,
-        lick_rate_high=np.nan,  lick_rate_low=np.nan,
+        lick_rate_high=np.nan, lick_rate_mid=np.nan, lick_rate_low=np.nan,
         pct_reward_consumed=np.nan, false_alarm_rate=np.nan,
         diverged=True,
     )
@@ -209,7 +210,13 @@ def run_one(hidden_size: int, rank: int | None, seed: int, device: torch.device)
     hidden  = None
     log_probs_buf, values_buf, rewards_buf, entropies_buf = [], [], [], []
     t_in_window = 0
-    diverged = False
+    diverged    = False
+    t_global    = 0
+    train_rows: list[dict] = []
+    first_rew_ts_lookup = {
+        trial["reward_window"][0]: ti
+        for ti, trial in enumerate(state_seq.trial_structure)
+    }
 
     try:
         done = False
@@ -223,9 +230,22 @@ def run_one(hidden_size: int, rank: int | None, seed: int, device: torch.device)
             values_buf.append(value)
             entropies_buf.append(dist.entropy())
 
+            if t_global in first_rew_ts_lookup:
+                ti_tr = first_rew_ts_lookup[t_global]
+                tr    = state_seq.trial_structure[ti_tr]
+                train_rows.append({
+                    "trial_idx": ti_tr,
+                    "stimulus":  tr["stimulus"],
+                    "context":   tr["context"],
+                    "value_gt":  float(VALUE_MATRIX[tr["stimulus"], tr["context"]]),
+                    "licked":    int(action.item() == TaskEnv.LICK),
+                    "value_est": float(value.item()),
+                })
+
             obs, reward, done, _, _ = env.step(action.item())
             rewards_buf.append(reward)
             t_in_window += 1
+            t_global    += 1
 
             if t_in_window % UPDATE_EVERY == 0 or done:
                 bootstrap_v = 0.0
@@ -269,11 +289,11 @@ def run_one(hidden_size: int, rank: int | None, seed: int, device: torch.device)
 
     except Exception as exc:
         warnings.warn(f"Training crashed (h={hidden_size}, r={rank}, seed={seed}): {exc}")
-        return nan_row
+        return nan_row, []
 
     if diverged or weights_nan(actor_critic):
         warnings.warn(f"NaN divergence (h={hidden_size}, r={rank}, seed={seed})")
-        return nan_row
+        return nan_row, []
 
     # ── inference ─────────────────────────────────────────────────────────
     infer_stim_seq = StimulusSequence(
@@ -332,7 +352,7 @@ def run_one(hidden_size: int, rank: int | None, seed: int, device: torch.device)
 
     # ── representation metrics ────────────────────────────────────────────
 
-    # Held-out cross-context decode: train on anchors, test on swaps
+    # Held-out cross-context decode: train on anchors, test on swaps (and reverse)
     try:
         r_mat      = held_out_stim_decode(
             activations, "stim", "average", VALUE_MATRIX,
@@ -341,6 +361,15 @@ def run_one(hidden_size: int, rank: int | None, seed: int, device: torch.device)
         held_out_r = float(mean_offdiag(r_mat))
     except Exception:
         held_out_r = np.nan
+
+    try:
+        r_mat_rev              = held_out_stim_decode(
+            activations, "stim", "average", VALUE_MATRIX,
+            train_stim_idx=SWAP_IDX, test_stim_idx=ANCHOR_IDX,
+        )
+        held_out_r_swap_to_anchor = float(mean_offdiag(r_mat_rev))
+    except Exception:
+        held_out_r_swap_to_anchor = np.nan
 
     # CCGP Ridge: train=all, test={anchor, swap}
     try:
@@ -382,7 +411,7 @@ def run_one(hidden_size: int, rank: int | None, seed: int, device: torch.device)
     VALUE_THRESHOLD = 0.25
     lp_flat, rp_flat = [], []
     rew_r_rates, rew_u_rates = [], []
-    lick_high_rates, lick_low_rates = [], []
+    lick_high_rates, lick_mid_rates, lick_low_rates = [], [], []
 
     for ti, trial in enumerate(trial_struct):
         s, e = trial["reward_window"]
@@ -398,6 +427,8 @@ def run_one(hidden_size: int, rank: int | None, seed: int, device: torch.device)
             lick_high_rates.append(rr)
         elif val <= VALUE_THRESHOLD:
             lick_low_rates.append(rr)
+        else:
+            lick_mid_rates.append(rr)
 
     for si in range(N_STIMULI):
         for ci in range(N_CONTEXTS):
@@ -413,20 +444,21 @@ def run_one(hidden_size: int, rank: int | None, seed: int, device: torch.device)
 
     spear_r        = float(spearmanr(rp_flat, lp_flat)[0]) if len(lp_flat) > 2 else np.nan
     lick_rate_high = float(np.nanmean(lick_high_rates))    if lick_high_rates else np.nan
+    lick_rate_mid  = float(np.nanmean(lick_mid_rates))     if lick_mid_rates  else np.nan
     lick_rate_low  = float(np.nanmean(lick_low_rates))     if lick_low_rates  else np.nan
     pct_reward     = float(np.nanmean(rew_r_rates) * 100)  if rew_r_rates     else np.nan
     false_alarm    = float(np.nanmean(rew_u_rates) * 100)  if rew_u_rates     else np.nan
 
     return dict(
-        held_out_r=held_out_r,
+        held_out_r=held_out_r, held_out_r_swap_to_anchor=held_out_r_swap_to_anchor,
         ccgp_ridge_anchor=ccgp_ridge_anchor, ccgp_ridge_swap=ccgp_ridge_swap,
         ccgp_bin_anchor=ccgp_bin_anchor,     ccgp_bin_swap=ccgp_bin_swap,
         rsa_identity_r=rsa_identity_r,       rsa_value_r=rsa_value_r,
         spearman_r=spear_r,
-        lick_rate_high=lick_rate_high, lick_rate_low=lick_rate_low,
+        lick_rate_high=lick_rate_high, lick_rate_mid=lick_rate_mid, lick_rate_low=lick_rate_low,
         pct_reward_consumed=pct_reward, false_alarm_rate=false_alarm,
         diverged=False,
-    )
+    ), train_rows
 
 
 # =============================================================================
@@ -561,6 +593,72 @@ def plot_results(df, hidden_sizes, rank_nums, out_dir, ts, n_seeds):
 
 
 # =============================================================================
+# TRAINING CURVES
+# =============================================================================
+
+def plot_training_curves(train_data, hidden_sizes, rank_nums, out_dir, ts):
+    """Per-config training curves grouped into high/mid/low value stimuli."""
+    all_rk  = rank_nums + [FULL_RANK_KEY]
+    rk_lbls = [str(r) for r in rank_nums] + ["full"]
+
+    group_specs = [
+        ("high", lambda v: v >= 1 - VALUE_THRESHOLD, "forestgreen", 1.0),
+        ("mid",  lambda v: VALUE_THRESHOLD < v < 1 - VALUE_THRESHOLD, "darkorange", 0.5),
+        ("low",  lambda v: v <= VALUE_THRESHOLD,      "crimson",      0.0),
+    ]
+    smooth_w = 30
+
+    for h in hidden_sizes:
+        ncols = len(all_rk)
+        fig, axes = plt.subplots(1, ncols, figsize=(4 * ncols, 3.5), sharey=True)
+        axes = list(axes) if hasattr(axes, "__len__") else [axes]
+
+        for ci, (rk, rk_lbl) in enumerate(zip(all_rk, rk_lbls)):
+            ax       = axes[ci]
+            seeds_td = train_data.get((h, rk), [])
+
+            for grp_lbl, grp_fn, color, target in group_specs:
+                seed_curves = []
+                for seed_rows in seeds_td:
+                    rows = [r for r in seed_rows if grp_fn(r["value_gt"])]
+                    if not rows:
+                        continue
+                    trial_idxs = np.array([r["trial_idx"] for r in rows])
+                    licked     = np.array([r["licked"] for r in rows], dtype=float)
+                    if len(licked) >= smooth_w:
+                        s = np.convolve(licked, np.ones(smooth_w) / smooth_w, mode="valid")
+                        x = trial_idxs[smooth_w - 1:]
+                    else:
+                        s, x = licked, trial_idxs
+                    ax.plot(x, s, color=color, alpha=0.3, lw=0.8)
+                    seed_curves.append((x, s))
+
+                if seed_curves:
+                    n  = min(len(x) for x, _ in seed_curves)
+                    mu = np.mean([y[:n] for _, y in seed_curves], axis=0)
+                    ax.plot(seed_curves[0][0][:n], mu, color=color, lw=2.0, label=grp_lbl)
+
+                ax.axhline(target, color=color, lw=0.6, ls=":", alpha=0.5)
+
+            ax.set_title(rk_lbl, fontsize=9)
+            ax.set_ylim(-0.05, 1.05)
+            ax.set_xlabel("Training trial", fontsize=8)
+            if ci == 0:
+                ax.set_ylabel("Lick rate (smoothed)", fontsize=8)
+            ax.legend(fontsize=7, frameon=False)
+
+        fig.suptitle(
+            f"Training curves — h={h}  (faint = per seed, bold = mean, dotted = target)",
+            fontsize=9, y=1.01,
+        )
+        plt.tight_layout()
+        p = out_dir / f"rank_sweep_train_curves_h{h}_{ts}.png"
+        fig.savefig(p, dpi=130, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Training curves h={h} → {p}")
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -586,22 +684,25 @@ def main():
         print(f"  h={h:>3}  {'full RNN' if r is None else f'rank={r}':<10}  trials/phase={tpp}")
     print()
 
-    rows   = []
-    n_done = 0
+    rows       = []
+    train_data = defaultdict(list)
+    n_done     = 0
     for hidden_size, rank in GRID:
         tag = f"h={hidden_size}  {'full RNN' if rank is None else f'rank={rank}'}"
         for s in range(args.seeds):
             seed    = args.base_seed + s
             n_done += 1
             print(f"[{n_done:>3}/{n_runs}]  {tag:<22}  seed={seed}", end="  ", flush=True)
-            metrics = run_one(hidden_size, rank, seed, device)
+            metrics, t_rows = run_one(hidden_size, rank, seed, device)
+            rk = FULL_RANK_KEY if rank is None else rank
             rows.append({
                 "hidden_size": hidden_size,
                 "rank":        rank,
-                "rank_key":    FULL_RANK_KEY if rank is None else rank,
+                "rank_key":    rk,
                 "seed":        seed,
                 **metrics,
             })
+            train_data[(hidden_size, rk)].append(t_rows)
             if metrics["diverged"]:
                 print("DIVERGED")
             else:
@@ -640,6 +741,7 @@ def main():
     hidden_sizes = sorted(df["hidden_size"].unique().tolist())
     rank_nums    = sorted(r for r in df["rank_key"].unique() if r != FULL_RANK_KEY)
     plot_results(df, hidden_sizes, rank_nums, out_dir, ts, args.seeds)
+    plot_training_curves(train_data, hidden_sizes, rank_nums, out_dir, ts)
 
 
 if __name__ == "__main__":

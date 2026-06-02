@@ -1,4 +1,5 @@
 import torch
+from torch.distributions import Categorical  # noqa: F401 – kept so autoreload doesn't break stale instances
 
 from cxval.models import ActorCritic
 

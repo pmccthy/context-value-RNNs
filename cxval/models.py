@@ -1,3 +1,6 @@
+from typing import Tuple
+
+import numpy as np
 import torch
 from torch import nn
 from torch.distributions import Categorical
@@ -11,6 +14,8 @@ class RNN(nn.Module):
         hidden_size,
         output_size,
         recurrent_gain=0.9,
+        h2h_init="orthogonal",
+        init_scale=1.0,
         input_plastic=True,
         hidden_plastic=True,
         output_plastic=True,
@@ -22,9 +27,13 @@ class RNN(nn.Module):
             hidden_size: Number of recurrent units.
             output_size: Dimensionality of the readout.
             recurrent_gain: Spectral radius of the initial recurrent weight matrix.
-                h2h is initialised with orthogonal weights scaled to this value.
-                Values < 1 give a contractive recurrence; 0.9 is a safe default
-                for long sequences with ReLU nonlinearity.
+                Used only when h2h_init="orthogonal".
+            h2h_init: Initialisation scheme for the recurrent weight matrix.
+                "orthogonal" — orthogonal matrix scaled by recurrent_gain (default).
+                "kaiming"    — Kaiming normal, same as the input/output layers.
+            init_scale: Global multiplier applied to all weights after initialisation.
+                Values < 1 give smaller initial activations; the network must grow
+                its weights during training rather than suppress them.
             input_plastic: Whether input weights are trainable.
             hidden_plastic: Whether recurrent weights are trainable.
             output_plastic: Whether readout weights are trainable.
@@ -35,6 +44,8 @@ class RNN(nn.Module):
         self.hidden_size = hidden_size
         self.output_size = output_size
         self.recurrent_gain = recurrent_gain
+        self.h2h_init = h2h_init
+        self.init_scale = init_scale
         self.nonlinearity = nn.ReLU()
 
         self.input2h = nn.Linear(input_size, hidden_size)
@@ -48,13 +59,20 @@ class RNN(nn.Module):
         self._initialize_weights()
 
     def _initialize_weights(self):
-        """Kaiming init for input/output layers; orthogonal init for h2h."""
+        """Kaiming init for input/output layers; h2h init determined by self.h2h_init."""
         for layer in [self.input2h, self.h2o]:
             nn.init.kaiming_normal_(layer.weight)
             if layer.bias is not None:
                 nn.init.zeros_(layer.bias)
-        nn.init.orthogonal_(self.h2h.weight, gain=self.recurrent_gain)
+        if self.h2h_init == "kaiming":
+            nn.init.kaiming_normal_(self.h2h.weight)
+        else:
+            nn.init.orthogonal_(self.h2h.weight, gain=self.recurrent_gain)
         nn.init.zeros_(self.h2h.bias)
+        if self.init_scale != 1.0:
+            with torch.no_grad():
+                for layer in [self.input2h, self.h2h, self.h2o]:
+                    layer.weight.mul_(self.init_scale)
 
     def init_hidden(self, batch_size, device):
         """Return a zero initial hidden state.
@@ -106,6 +124,20 @@ class RNN(nn.Module):
 
         return output, hidden_all
 
+    def get_activations(
+        self,
+        X: torch.Tensor,
+        y: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> Tuple[np.ndarray, float]:
+        self.eval()
+        with torch.no_grad():
+            outputs, hidden_states = self(X.transpose(0, 1))
+            outputs_flat = outputs[mask].reshape(-1, outputs.shape[-1])
+            targets_flat = y.transpose(0, 1)[mask].reshape(-1, y.shape[-1])
+            accuracy = (outputs_flat.argmax(1) == targets_flat.argmax(1)).float().mean().item()
+            activations = hidden_states.transpose(0, 1).cpu().numpy()
+        return activations, accuracy
 
 class LeakyRNN(RNN):
 
@@ -114,7 +146,8 @@ class LeakyRNN(RNN):
         input_size,
         hidden_size,
         output_size,
-        alpha,
+        tau,
+        dt=1.0,
         recurrent_gain=0.9,
         input_plastic=True,
         hidden_plastic=True,
@@ -124,12 +157,14 @@ class LeakyRNN(RNN):
 
         The hidden state update follows:
             h_t = (1 - alpha) * h_{t-1} + alpha * phi(W_in x_t + W_rec h_{t-1})
+        where alpha = dt / tau.
 
         Args:
             input_size: Dimensionality of the input at each time step.
             hidden_size: Number of recurrent units.
             output_size: Dimensionality of the readout.
-            alpha: Leak rate in (0, 1]; equivalent to dt/tau.
+            tau: Time constant of the leak; larger values give slower dynamics.
+            dt: Simulation timestep. Defaults to 1.0.
             recurrent_gain: Spectral radius for orthogonal h2h initialisation.
             input_plastic: Whether input weights are trainable.
             hidden_plastic: Whether recurrent weights are trainable.
@@ -145,7 +180,9 @@ class LeakyRNN(RNN):
             output_plastic=output_plastic,
         )
 
-        self.alpha = alpha
+        self.tau = tau
+        self.dt = dt
+        self.alpha = dt / tau
 
     def recurrence(self, x_t, h_prev):
         """Compute one leaky-integration step.
@@ -272,7 +309,8 @@ class LowRankLeakyRNN(LowRankRNN):
         hidden_size,
         output_size,
         rank,
-        alpha,
+        tau,
+        dt=1.0,
         gain=0.0,
         input_plastic=True,
         hidden_plastic=True,
@@ -285,7 +323,8 @@ class LowRankLeakyRNN(LowRankRNN):
             hidden_size: Number of recurrent units.
             output_size: Dimensionality of the readout.
             rank: Rank R of the recurrent weight matrix.
-            alpha: Leak rate in (0, 1]; equivalent to dt/tau.
+            tau: Time constant of the leak; larger values give slower dynamics.
+            dt: Simulation timestep. Defaults to 1.0.
             gain: Scaling factor for the fixed random component J_0; each
                 entry is drawn from N(0, gain² / hidden_size).  gain=0
                 disables the random component entirely.
@@ -304,7 +343,9 @@ class LowRankLeakyRNN(LowRankRNN):
             output_plastic=output_plastic,
         )
 
-        self.alpha = alpha
+        self.tau = tau
+        self.dt = dt
+        self.alpha = dt / tau
 
     def recurrence(self, x_t, h_prev):
         """Compute one leaky step with low-rank recurrent dynamics.
@@ -336,13 +377,29 @@ class ActorCritic(nn.Module):
     Args:
         backbone: A constructed RNN instance (e.g. LeakyRNN, LowRankRNN).
         num_actions: Number of discrete actions for the policy head.
+        policy_clip: When > 0, action probabilities are clamped to
+            [policy_clip, 1 - policy_clip] before sampling.
+        readout_fraction: Fraction of hidden units that project to the policy
+            and value heads (default 1.0 = full readout).  Only the first
+            ``int(hidden_size * readout_fraction)`` neurons are connected to
+            the output heads; the remaining units participate in recurrent
+            dynamics but have no direct output projection.  Set to 0.5 to
+            match the cogNN partial-readout architecture.
     """
 
-    def __init__(self, backbone: RNN, num_actions: int, policy_clip: float = 0.0):
+    def __init__(
+        self,
+        backbone: RNN,
+        num_actions: int,
+        policy_clip: float = 0.0,
+        readout_fraction: float = 1.0,
+    ):
         super().__init__()
         self.backbone = backbone
-        self.policy_head = nn.Linear(backbone.hidden_size, num_actions)
-        self.value_head = nn.Linear(backbone.hidden_size, 1)
+        self.readout_fraction = readout_fraction
+        self.n_readout = max(1, int(backbone.hidden_size * readout_fraction))
+        self.policy_head = nn.Linear(self.n_readout, num_actions)
+        self.value_head = nn.Linear(self.n_readout, 1)
         self.policy_clip = policy_clip
 
     def make_dist(self, logits):
@@ -373,8 +430,9 @@ class ActorCritic(nn.Module):
             hidden_all: Hidden states of shape (batch, time_steps, hidden_size).
         """
         _, hidden_all = self.backbone(x, hidden)
-        logits = self.policy_head(hidden_all)
-        values = self.value_head(hidden_all).squeeze(-1)
+        readout = hidden_all[..., :self.n_readout]
+        logits = self.policy_head(readout)
+        values = self.value_head(readout).squeeze(-1)
         return logits, values, hidden_all
 
     def step(self, obs, hidden=None):
@@ -392,6 +450,22 @@ class ActorCritic(nn.Module):
         if hidden is None:
             hidden = self.backbone.init_hidden(obs.shape[0], obs.device)
         hidden = self.backbone.recurrence(obs, hidden)
-        logits = self.policy_head(hidden)
-        value = self.value_head(hidden).squeeze(-1)
+        readout = hidden[..., :self.n_readout]
+        logits = self.policy_head(readout)
+        value = self.value_head(readout).squeeze(-1)
         return logits, value, hidden
+
+    def get_activations(
+        self,
+        X: torch.Tensor,
+        y: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> Tuple[np.ndarray, float]:
+        self.eval()
+        with torch.no_grad():
+            logits, _, hidden_states = self(X.transpose(0, 1))
+            logits_flat = logits[mask].reshape(-1, logits.shape[-1])
+            targets_flat = y.transpose(0, 1)[mask].reshape(-1, y.shape[-1])
+            accuracy = (logits_flat.argmax(1) == targets_flat.argmax(1)).float().mean().item()
+            activations = hidden_states.transpose(0, 1).cpu().numpy()
+        return activations, accuracy

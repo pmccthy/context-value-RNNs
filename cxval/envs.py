@@ -20,6 +20,7 @@ class TaskEnv:
     Lick during reward window, reward available     → reward_lick      (default +1)
     Lick during reward window, reward not available → reward_lick_miss  (default -1)
     Any other timestep / no-lick                    → reward_no_lick    (default  0)
+    Any lick at any timestep                        → -= lick_cost      (default  0)
 
     Only the first lick in each reward window is counted; subsequent licks
     within the same window are treated as no-lick.
@@ -35,6 +36,9 @@ class TaskEnv:
     reward_lick : float
     reward_no_lick : float
     reward_lick_miss : float
+    lick_cost : float
+        Per-lick penalty subtracted from the reward on every timestep the agent
+        licks, regardless of reward availability.  Set to 0 (default) to disable.
     """
 
     LICK = 0
@@ -47,6 +51,7 @@ class TaskEnv:
         reward_lick=1.0,
         reward_no_lick=0.0,
         reward_lick_miss=-1.0,
+        lick_cost=0.0,
     ):
         self._states = np.asarray(states, dtype=np.float32)
         self._reward_availability = np.asarray(reward_availability, dtype=np.float32)
@@ -55,6 +60,7 @@ class TaskEnv:
         self.reward_lick = reward_lick
         self.reward_no_lick = reward_no_lick
         self.reward_lick_miss = reward_lick_miss
+        self.lick_cost = lick_cost
 
         self._t = 0
         self._licked_this_window = False
@@ -111,6 +117,9 @@ class TaskEnv:
             reward = self.reward_lick if reward_available else self.reward_lick_miss
         else:
             reward = self.reward_no_lick
+
+        if licked and self.lick_cost != 0.0:
+            reward -= self.lick_cost
 
         self._t += 1
         terminated = self._t >= self.T

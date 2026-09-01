@@ -1,5 +1,44 @@
-# Results and outputs
-results/
+# Results and outputs (large generated data -- everything except the
+# transfer study's own code, which stays self-contained alongside its data
+# in results/transfer/).
+results/*
+!results/transfer/
+results/transfer/*
+!results/transfer/code/
+!results/transfer/reproducibility/
+!results/transfer/README.md
+!results/transfer/environment.yml
+!results/transfer/requirements.txt
+!results/transfer/reversal/
+results/transfer/reversal/*
+!results/transfer/reversal/code/
+!results/transfer/reversal/reproducibility/
+!results/transfer/reversal/README.md
+!results/transfer/combined/
+results/transfer/combined/*
+!results/transfer/combined/panels/
+!results/transfer/combined/analysis/
+!results/transfer/combined/style/
+!results/transfer/combined/cross_model_vs_experiment/
+!results/transfer/combined/compose.py
+!results/transfer/combined/make_panels.py
+!results/transfer/combined/FIGURE_LIST.md
+!results/transfer/combined/README.md
+# combined/transfer/ is a symlink shim to the deduped data above -- not code,
+# not tracked, and each individual symlink is also caught by the results/*
+# rule since it isn't negated back in.
+
+# Old top-level dirs, sitting here until you delete them (see chat).
+/_to_delete/
+
+# Generated figures from unrelated sweeps (same rationale as results/).
+/figures/
+
+# Claude Code local settings -- not project config.
+/.claude/
+
+# Sync/transfer archives -- transient, not source.
+/sync_*.tar.gz
 
 # Python
 __pycache__/

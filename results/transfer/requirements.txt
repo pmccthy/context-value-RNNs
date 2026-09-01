@@ -1,0 +1,11 @@
+# Minimal environment for GENERATING THE FIGURES from the stored data
+# (figures read only figure_data/ — no PyTorch needed).
+#   python -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt
+#   python code/figures.py --data figure_data --out figures
+# To re-open the notebooks in code/, jupyterlab is included.
+numpy>=1.26,<2.1
+pandas>=2.0
+matplotlib>=3.7
+scipy>=1.10            # only for code/build_figure_data_from_timeresolved.py (metric rebuild)
+jupyterlab>=4.0

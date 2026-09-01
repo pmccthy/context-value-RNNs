@@ -1,0 +1,8 @@
+# cxval matplotlib style
+
+# spines
+axes.spines.top:    False
+axes.spines.right:  False
+
+# grid
+axes.grid:          False

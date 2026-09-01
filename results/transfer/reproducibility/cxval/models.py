@@ -445,88 +445,6 @@ class LowRankLeakyRNN(LowRankRNN):
         return h_t
 
 
-class GRUBackbone(nn.Module):
-    """Gated (GRU) backbone -- added 08_08_26, belief-state search (see
-    results/08_08_26_belief_state_search/REPORT.md Experiment 6, and the
-    agent brief's 'Things to try' #4: the standard, well-established fix for
-    long-horizon credit assignment / evidence integration in recurrent
-    policy gradient and RL^2-style meta-learning, motivated directly by
-    Experiment 5's finding that a plain-Elman memoryless recurrence cannot
-    build a linearly-decodable multi-trial context representation from the
-    uncued task's weak feedback signal, even under strong supervised
-    pressure to do so).
-
-    Exposes the EXACT SAME public interface as :class:`RNN`
-    (``recurrence``, ``init_hidden``, ``activity``, ``forward``,
-    ``hidden_size``, ``h2o``) so it is a drop-in for every existing caller
-    that only relies on that interface -- ``build_backbone``'s dispatch,
-    and the per-step training loops in ``cxval.context_vigour`` /
-    ``cxval.vigour`` (which call ``ac.step`` -> ``backbone.recurrence``
-    every timestep, never anything RNN-class-specific).
-
-    Uses ``torch.nn.GRUCell`` for the per-step recurrence. The GRU's hidden
-    state already IS the "rate" (bounded via internal sigmoid/tanh gating,
-    no separate readout nonlinearity the way "mastrogiuseppe" dynamics
-    needs one) -- ``activity(h)`` is the identity, matching "elman"
-    dynamics' convention that the persisted state is already
-    post-nonlinearity. No rank/low-rank variant, no leaky/dynamics
-    variant, no ``recurrent_gain`` (GRUCell's own default PyTorch init is
-    used, not the orthogonal-with-gain scheme -- gating already provides a
-    trained-in-place path for gradients to survive long windows, which is
-    the entire reason to try this, so it doesn't need the same init trick
-    used to compensate for a plain Elman map's lack of one).
-    """
-
-    def __init__(self, input_size, hidden_size, output_size,
-                 input_plastic=True, hidden_plastic=True, output_plastic=True,
-                 init_scale=1.0, **_ignored_kwargs):
-        super().__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.output_size = output_size
-        self.dynamics = "elman"  # activity(h) is the identity -- same convention as elman
-        self.cell = nn.GRUCell(input_size, hidden_size)
-        self.h2o = nn.Linear(hidden_size, output_size)
-        self.cell.requires_grad_(hidden_plastic)
-        self.h2o.requires_grad_(output_plastic)
-        if init_scale != 1.0:
-            with torch.no_grad():
-                for p in self.cell.parameters():
-                    p.mul_(init_scale)
-                if not output_plastic:
-                    pass
-        if not input_plastic:
-            # GRUCell doesn't separate input/hidden weight matrices into
-            # distinct sub-modules we could freeze independently without
-            # breaking the fused gate computation -- input_plastic=False
-            # is not supported for this backbone (freeze hidden_plastic
-            # and/or output_plastic instead). Not needed for this search
-            # (nothing here uses input_plastic=False), so just warn.
-            import warnings as _warnings
-            _warnings.warn("GRUBackbone: input_plastic=False is not supported "
-                           "(GRUCell fuses input/hidden weights) -- ignored.")
-
-    def init_hidden(self, batch_size, device):
-        return torch.zeros(batch_size, self.hidden_size, device=device)
-
-    def activity(self, h):
-        return h
-
-    def recurrence(self, x_t, h_prev):
-        return self.cell(x_t, h_prev)
-
-    def forward(self, x, hidden=None):
-        if hidden is None:
-            hidden = self.init_hidden(x.shape[0], x.device)
-        hidden_all = []
-        for t in range(x.size(1)):
-            hidden = self.recurrence(x[:, t, :], hidden)
-            hidden_all.append(self.activity(hidden))
-        hidden_all = torch.stack(hidden_all, dim=1)
-        output = self.h2o(hidden_all)
-        return output, hidden_all
-
-
 def build_backbone(
     rank,
     input_size,
@@ -552,12 +470,8 @@ def build_backbone(
     analysis (see ``cxval.analysis``) rather than via architecture.
 
     Args:
-        rank: 1, 2, 3, ... for a :class:`LowRankRNN`; ``None`` / ``"full"``
-            / any value >= hidden_size for a full-rank (dense) :class:`RNN`;
-            or the string ``"gru"`` for a :class:`GRUBackbone` (added
-            08_08_26 -- see its docstring). recurrent_gain/lowrank_gain/
-            lowrank_scale/dynamics/tau/dt are all ignored for "gru" (not
-            applicable to a gated cell).
+        rank: 1, 2, 3, ... for a :class:`LowRankRNN`; or ``None`` / ``"full"``
+            / any value >= hidden_size for a full-rank (dense) :class:`RNN`.
         input_size, hidden_size, output_size: Layer sizes (output_size is
             unused by the vigour heads but required by the RNN constructors).
         recurrent_gain, init_scale: Passed to the full-rank RNN's orthogonal
@@ -597,15 +511,8 @@ def build_backbone(
     Returns:
         An RNN/LeakyRNN or LowRankRNN/LowRankLeakyRNN instance (all are
         ``cxval.models.RNN`` subclasses with an identical
-        recurrence/forward/step interface), or a :class:`GRUBackbone`
-        (same interface, not an ``RNN`` subclass) if ``rank="gru"``.
+        recurrence/forward/step interface).
     """
-    if isinstance(rank, str) and rank.lower() == "gru":
-        return GRUBackbone(
-            input_size=input_size, hidden_size=hidden_size, output_size=output_size,
-            input_plastic=input_plastic, hidden_plastic=hidden_plastic,
-            output_plastic=output_plastic, init_scale=init_scale,
-        )
     is_full = (
         rank is None
         or (isinstance(rank, str) and rank.lower() == "full")

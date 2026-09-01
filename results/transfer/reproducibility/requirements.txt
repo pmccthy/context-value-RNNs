@@ -1,0 +1,9 @@
+# Fuller environment to RE-GENERATE THE DATA (train models + run inference).
+# Supersets the figures-only requirements at the bundle root.
+#   pip install -r reproducibility/requirements.txt
+numpy>=1.26,<2.1
+pandas>=2.0
+matplotlib>=3.7
+torch>=2.0
+scipy>=1.10
+scikit-learn>=1.3

@@ -1,0 +1,21 @@
+# Ported verbatim from
+# ~/Documents/neuronal-representations/results/transfer/figures/panels/transfer.mplstyle
+# so RNN-model figures match the experimental-data figures they're compared against.
+# (transfer_final/code/figure_style.mplstyle and reversal_study/code/figure_style.mplstyle
+# are the OLD model-only style — larger fonts, PDF+PNG output, no figure tag stamp.
+# This file replaces them for any new/updated figure going forward.)
+axes.labelsize:      22
+axes.labelweight:    normal
+axes.titlesize:      12
+xtick.labelsize:     18
+ytick.labelsize:     18
+legend.fontsize:     14
+font.size:           14
+axes.spines.top:     False
+axes.spines.right:   False
+patch.linewidth:        0
+patch.force_edgecolor:  False
+legend.frameon:      False
+figure.dpi:          100
+savefig.dpi:         150
+savefig.bbox:        tight

@@ -1,0 +1,12 @@
+# Minimal conda environment for generating the figures from the stored data.
+#   conda env create -f environment.yml && conda activate cxval-figs
+#   python code/figures.py --data figure_data --out figures
+name: cxval-figs
+channels: [conda-forge]
+dependencies:
+  - python>=3.10
+  - numpy>=1.26,<2.1
+  - pandas>=2.0
+  - matplotlib>=3.7
+  - scipy>=1.10          # only for code/build_figure_data_from_timeresolved.py
+  - jupyterlab>=4.0

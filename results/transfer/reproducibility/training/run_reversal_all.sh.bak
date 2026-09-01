@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Continue-train every trained model on the reversal (swap 0% <-> 100%), warm-started.
+# Reads trained runs from RUNS (default model_runs), writes reversed runs to OUT
+# (default model_runs_reversal), mirroring <type>/seed<NN>/.
+# Usage:  [SEEDS="42 43"] [RUNS=/path] [OUT=/path] [N_TRIALS=5000] [PY=python] bash run_reversal_all.sh
+set -euo pipefail
+PY="${PY:-python}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RUNS="${RUNS:-model_runs}"
+OUT="${OUT:-model_runs_reversal}"
+SEEDS="${SEEDS:-$(seq 42 71)}"
+N_TRIALS="${N_TRIALS:-2500}"          # reversal continue-training length (trials/episode)
+for MT in classif_rl rl_only classif_rl_readout_only; do
+  for s in $SEEDS; do
+    [ -f "$RUNS/$MT/seed$s/model.pt" ] || continue
+    echo ">> reversal $MT seed$s  (n_trials=$N_TRIALS)"
+    "$PY" "$HERE/train_reversal.py" --run "$RUNS/$MT/seed$s" --out "$OUT/$MT/seed$s" \
+        --n-trials "$N_TRIALS"
+  done
+done
+echo "done. Next: run_inference --runs $OUT --out figure_data_reversal ; then figures.py"

@@ -45,11 +45,27 @@ _GROUP_CODES = [sum(1 << i for i in g) for g in _GROUP_ORDER]
 _BITS = np.array([1, 2, 4])
 
 
-def responders_temporal_one_seed(npz_path, alpha=0.05, max_int=3, frac=1.0 / 3.0):
+def responders_temporal_one_seed(npz_path, alpha=0.05, max_int=3, frac=1.0 / 3.0,
+                                  resize="upsample"):
     """Run the temporal-cluster t-test for one (model_type, seed) time_resolved
     file. Returns (H, 3) bool array: resp[:, s] = significant responders to
     stimulus s, matching the shape/semantics of build_figure_data_from_timeresolved's
-    `resp` array (but from the temporal-cluster test, not the paired-window test)."""
+    `resp` array (but from the temporal-cluster test, not the paired-window test).
+
+    resize: passed to responders_from_windows/t_test_temporal. Default stays
+    "upsample" (unchanged pipeline behaviour: the ITI/baseline window, e.g.
+    3 native timepoints, is stretched up to the stim window's length, e.g. 5,
+    via linear interpolation). resize="downsample" instead compresses the
+    stim window down to the baseline's native length -- no synthetic baseline
+    data -- but DO NOT make this the default: with n_iti=3 native timepoints,
+    the contiguous-run criterion (length_of_continuous_subarray) can never be
+    satisfied at n_timepoints=3 (its "run" value for an all-significant
+    window of length n is only n-2, and the threshold is n/3 -- n-2 > n/3
+    requires n>=4), so downsample-to-3 makes EVERY unit non-responsive,
+    unconditionally, regardless of the data. Confirmed empirically: 0/128
+    responders across all 3 model types x 3 seeds tested. See the chat --
+    this needs either a coarser fix to the run-length formula itself, or a
+    fixed downsample target >=4 timepoints, before it's usable."""
     z = np.load(npz_path, allow_pickle=True)
     aligned = np.asarray(z["aligned"], dtype=np.float32)   # (trial, time, unit)
     stim = np.asarray(z["stimulus"])
@@ -62,7 +78,7 @@ def responders_temporal_one_seed(npz_path, alpha=0.05, max_int=3, frac=1.0 / 3.0
         baseline = aligned[idx, 0:n_iti, :]                # (n_trials_s, n_iti, H)
         stim_win = aligned[idx, n_iti:n_iti + stim_ts, :]   # (n_trials_s, stim_ts, H)
         out = responders_from_windows(baseline, stim_win, alpha=alpha,
-                                       max_int=max_int, frac=frac)
+                                       max_int=max_int, frac=frac, resize=resize)
         resp[:, s] = out["sig"]
         diag[s] = dict(n_trials=int(idx.sum()), n_sig=int(out["sig"].sum()))
     return resp, diag
@@ -175,6 +191,62 @@ def responders_native_one_seed(npz_path, alpha=0.05, max_int=3, frac=1.0 / 3.0,
         resp[:, s] = sig
         diag[s] = dict(n_trials=int(idx.sum()), n_sig=int(sig.sum()))
     return resp, diag
+
+
+# --------------------------------------------------------------------------- #
+# D-copy helper: swap the temporal-cluster method into an existing figure_data
+# D dict, so every existing draw function that reads D["responsive"] (directly,
+# or via model_group_categories.py's fine_counts_pooled/broad_counts_pooled)
+# works UNCHANGED against either responder method -- just pass build_temporal_D(D, ...)
+# instead of D. Everything else in D (scalars, tuning, aligned_mean, seeds, ...)
+# is left untouched; only D["responsive"]["data"] is replaced.
+# --------------------------------------------------------------------------- #
+def build_temporal_D(D, time_resolved_dir, alpha=0.05, max_int=3, frac=1.0 / 3.0, seeds=None):
+    """Return a shallow copy of `D` with D["responsive"]["data"] recomputed via the
+    temporal-cluster t-test (responders_temporal_one_seed) from the raw per-trial
+    time_resolved/<model_type>_seed<NN>.npz files in `time_resolved_dir`, instead of
+    the time-averaged window-mean test that normally populates figure_data.pkl.
+
+    `seeds`: None (use D["seeds_present"][model_type] for each model type, i.e. every
+    seed the pickle itself considers present) or an explicit list applied to every
+    model type.
+
+    Raises FileNotFoundError listing every missing (model_type, seed) .npz rather than
+    silently leaving those units zeroed/non-responsive -- callers should catch this
+    and report it (e.g. when time_resolved data hasn't been generated yet for a given
+    phase/study) instead of proceeding with a silently-incomplete comparison.
+    """
+    orig = D["responsive"]
+    model_types = D["model_types"]
+    seed_idx = {s: i for i, s in enumerate(D["seeds"])}
+    data = np.zeros_like(orig["data"], dtype=bool)
+    missing = []
+    per_seed_diag = {}
+    for ti, mt in enumerate(model_types):
+        want_seeds = seeds if seeds is not None else D["seeds_present"].get(mt, D["seeds"])
+        for s in want_seeds:
+            f = Path(time_resolved_dir) / f"{mt}_seed{s}.npz"
+            if not f.exists():
+                missing.append(str(f))
+                continue
+            resp, diag = responders_temporal_one_seed(str(f), alpha=alpha, max_int=max_int, frac=frac)
+            data[ti, seed_idx[s], :, :] = resp
+            per_seed_diag[(mt, s)] = diag
+    if missing:
+        raise FileNotFoundError(
+            f"build_temporal_D: {len(missing)} time_resolved file(s) missing under "
+            f"{time_resolved_dir} (first: {missing[0]}) -- the temporal method needs "
+            f"raw per-trial data for every (model_type, seed) present in D. Run "
+            f"scripts/16_06_26_run_inference.py against the matching model_runs dir "
+            f"to produce them."
+        )
+    Dg = dict(D)
+    Dg["responsive"] = dict(orig)
+    Dg["responsive"]["data"] = data
+    Dg["responsive"]["description"] = orig["description"] + " (temporal-cluster t-test criterion, matches real-data method)"
+    Dg["_responder_method"] = "temporal"
+    Dg["_responder_diag"] = per_seed_diag
+    return Dg
 
 
 def pooled_group_counts_native(time_resolved_dir, model_type, alpha=0.05,

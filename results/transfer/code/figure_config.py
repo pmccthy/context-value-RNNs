@@ -16,7 +16,7 @@ STIM_LABELS = ["0%", "50%", "100%"]
 
 # Per-model colours + labels, used by the bar plots (colours differ by model).
 MODELS = {
-    "classif_rl":              {"label": "SSL + RL",                     "color": "#aa3377"},
-    "rl_only":                 {"label": "RL only",                      "color": "#3377bb"},
-    "classif_rl_readout_only": {"label": "SSL + RL (readout-only RL)",   "color": "#229977"},
+    "classif_rl":              {"label": "SSL + RL", "color": "#cc5500"},  # burnt orange -- previous #aa3377 (pink/magenta) was too close to STIM_COLOURS["50"] (#c24167)
+    "rl_only":                 {"label": "RL",       "color": "#3377bb"},
+    "classif_rl_readout_only": {"label": "SSL",      "color": "#229977"},
 }

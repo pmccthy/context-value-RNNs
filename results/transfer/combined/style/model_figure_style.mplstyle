@@ -19,3 +19,8 @@ legend.frameon:      False
 figure.dpi:          100
 savefig.dpi:         150
 savefig.bbox:        tight
+
+# Font family -- Helvetica everywhere, with sane fallbacks for machines
+# that don't have it installed (e.g. Linux without the Apple/MS fonts).
+font.family:       sans-serif
+font.sans-serif:   Helvetica, Arial, Nimbus Sans, DejaVu Sans, sans-serif

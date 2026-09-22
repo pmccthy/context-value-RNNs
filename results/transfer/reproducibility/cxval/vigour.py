@@ -288,7 +288,7 @@ def train_vigour(value_matrix, *, batch_size=32, n_trials_per_episode=1500,
                  init_backbone=None, init_model=None, lr_warmup=0,
                  policy="score", probe_every=0, probe_fn=None,
                  checkpoint_dir=None, checkpoint_every=25, checkpoint_fine_until=0,
-                 checkpoint_fine_every=1, verbose=False):
+                 checkpoint_fine_every=1, verbose=False, track_gradients=False):
     if model_seed is None:
         model_seed = base_seed
     device = torch.device(device)
@@ -476,6 +476,17 @@ def train_vigour(value_matrix, *, batch_size=32, n_trials_per_episode=1500,
                     loss = loss + nn_loss
                     history["nonneg_loss"].append(float(nn_loss.detach()))
             loss.backward()
+            if track_gradients:
+                def _gnorm(params):
+                    gs = [p.grad.detach() for p in params if p.grad is not None]
+                    return float(torch.sqrt(sum((g ** 2).sum() for g in gs))) if gs else float("nan")
+                history["grad_norm_backbone"].append(_gnorm(ac.backbone.parameters()))
+                history["grad_norm_vigour_head"].append(_gnorm(ac.vigour_head.parameters()))
+                history["grad_norm_value_head"].append(_gnorm(ac.value_head.parameters()))
+                if ac.stim_head is not None:
+                    history["grad_norm_stim_head"].append(_gnorm(ac.stim_head.parameters()))
+                history["policy_loss"].append(float(policy_loss.detach()))
+                history["value_loss"].append(float(value_loss.detach()))
             gn = nn.utils.clip_grad_norm_(ac.parameters(), grad_clip)
             grad_norms.append(float(gn))
             if lr_warmup > 0:                          # linear LR warmup over first updates
@@ -623,6 +634,61 @@ def infer_value(model, value_matrix, *, n_eval_episodes=12, n_trials_per_episode
             rs, re = tr["reward_window"]; s = tr["stimulus"]
             val_by_stim[s].append(float(val[b, rs:re].mean()))
     return {s: float(np.mean(val_by_stim[s])) if val_by_stim[s] else float("nan")
+            for s in (0, 1, 2)}
+
+
+def infer_rpe(model, value_matrix, *, n_eval_episodes=12, n_trials_per_episode=400,
+              base_seed=10_000, device="cpu", vigour_cost=1.1, cost_type="quadratic",
+              reward_fa=0.0, stim_timesteps=5, reward_timesteps=3, iti_timesteps=(3, 8),
+              gamma=0.9):
+    """Deterministic eval: mean reward-prediction error (TD error) per stimulus.
+
+    delta_t = r_t + gamma*V(s_{t+1}) - V(s_t), the actor-critic analog of
+    dopaminergic RPE, averaged over each trial's reward window (the same window
+    infer_vigour/infer_value average over). V(s_t) comes for free from the same
+    forward pass used to pick the action, so this costs one rollout, same cost
+    class as infer_vigour/infer_value. The very last timestep bootstraps
+    V(s_T)=0 (episode truncation), matching train_vigour's own end-of-episode
+    treatment (see the `bv = torch.zeros(B, device=device)` branch when `done`).
+
+    Added to this reproducibility-pinned cxval snapshot (backported from the
+    live cxval/vigour.py, which predates this snapshot in having it) so
+    make_probe() can log a genuine, properly vigour-cost-corrected RPE
+    trajectory during training/reversal -- WITHOUT touching any existing
+    function's behaviour (new function only, nothing else in this file's
+    control flow changes for any existing caller).
+    """
+    device = torch.device(device)
+    value_matrix = np.asarray(value_matrix, dtype=np.float32)
+    states_b, ravail_b, active_b, structs = generate_batch(
+        value_matrix, n_trials_per_episode, n_eval_episodes, base_seed,
+        stim_timesteps=stim_timesteps, reward_timesteps=reward_timesteps,
+        iti_timesteps=iti_timesteps)
+    env = BatchedVigourEnv(states_b, ravail_b, active_b, reward_fa=reward_fa,
+                           vigour_cost=vigour_cost, cost_type=cost_type)
+    B, T, D = states_b.shape
+    model.eval()
+    obs = torch.as_tensor(env.reset(), dtype=torch.float32, device=device)
+    hidden = None
+    val = np.zeros((B, T + 1), np.float32)   # V(s_t); val[:,T] stays 0 (terminal bootstrap)
+    rew = np.zeros((B, T), np.float32)
+    done = False; t = 0
+    while not done:
+        mean, value, hidden = model.step(obs, hidden)
+        v = model.squash(mean)
+        val[:, t] = value.cpu().numpy()
+        obs_np, r, done, _ = env.step(v.cpu().numpy())
+        rew[:, t] = r
+        obs = torch.as_tensor(obs_np, dtype=torch.float32, device=device)
+        t += 1
+    delta = rew + gamma * val[:, 1:] - val[:, :-1]        # (B, T) TD error
+
+    rpe_by_stim = {0: [], 1: [], 2: []}
+    for b, struct in enumerate(structs):
+        for tr in struct:
+            rs, re = tr["reward_window"]; s = tr["stimulus"]
+            rpe_by_stim[s].append(float(delta[b, rs:re].mean()))
+    return {s: float(np.mean(rpe_by_stim[s])) if rpe_by_stim[s] else float("nan")
             for s in (0, 1, 2)}
 
 

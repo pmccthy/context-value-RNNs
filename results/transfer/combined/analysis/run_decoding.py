@@ -24,7 +24,7 @@ Run in your cxval env:
     python3 unified_figures/analysis/run_decoding.py \
         --pre unified_figures/transfer/figure_data \
         --post unified_figures/transfer/figure_data_reversal \
-        --out unified_figures/output/decoding
+        --out unified_figures/figs/decoding
 
 Also computes three new decoders (model-side FIG2-equivalent panels, see
 analysis/context_stimidentity_decode.py's docstring for exactly what each
@@ -58,7 +58,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pre", default=str(_HERE.parent / "transfer" / "figure_data"))
     ap.add_argument("--post", default=str(_HERE.parent / "transfer" / "figure_data_reversal"))
-    ap.add_argument("--out", default=str(_HERE.parent / "output" / "decoding"))
+    ap.add_argument("--out", default=str(_HERE.parent / "figs" / "decoding"))
     ap.add_argument("--period", default="stim", choices=["stim", "reward"])
     ap.add_argument("--pooling", default="average", choices=["average", "pool"])
     ap.add_argument("--model-types", nargs="*",

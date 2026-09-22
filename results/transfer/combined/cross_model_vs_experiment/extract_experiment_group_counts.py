@@ -58,8 +58,21 @@ import pandas as pd
 EXPERIMENT_ROOT = Path(
     os.environ.get("NEURONAL_REPO", str(Path.home() / "Documents" / "neuronal-representations"))
 ) / "results" / "transfer"
-EXPERT_CSV = EXPERIMENT_ROOT / "data" / "subgroups" / "responsiveness_ttest_expert_long.csv"
-REVERSAL_CSV = EXPERIMENT_ROOT / "data" / "subgroups" / "responsiveness_ttest_reversal_long.csv"
+
+# Two responder-significance criteria the real-data repo now extracts side by
+# side (see neuronal-representations/analysis/responsiveness_ttest.py vs
+# responsiveness_time_averaged.py): "temporal" is the original per-timepoint
+# contiguous-run test (responsiveness_ttest_*_long.csv, the file this script
+# has always read); "time_averaged" is the window-mean paired t-test that
+# matches the model repo's own (pre-existing) responder definition
+# (responsiveness_time_averaged_*_long.csv). --method picks which.
+_CSV_STEM = {"temporal": "responsiveness_ttest", "time_averaged": "responsiveness_time_averaged"}
+
+
+def _csv_paths(method):
+    stem = _CSV_STEM[method]
+    return (EXPERIMENT_ROOT / "data" / "subgroups" / f"{stem}_expert_long.csv",
+            EXPERIMENT_ROOT / "data" / "subgroups" / f"{stem}_reversal_long.csv")
 
 # Must match GROUP_LABELS / GROUP_ORDER in reversal_study/code/figures.py exactly.
 GROUP_LABELS = [
@@ -134,7 +147,13 @@ def main():
     ap.add_argument("--phase", choices=["pre", "post"], default=None,
                      help="required when dataset=reversal")
     ap.add_argument("--out-dir", default="group_counts")
+    ap.add_argument("--method", choices=["temporal", "time_averaged"], default="temporal",
+                     help="responder-significance criterion (see _CSV_STEM above); "
+                          "output is always named <dataset>[_<phase>]_<method>.json "
+                          "(the method suffix is never dropped, so both criteria's "
+                          "outputs coexist)")
     args = ap.parse_args()
+    EXPERT_CSV, REVERSAL_CSV = _csv_paths(args.method)
 
     if args.dataset == "expert":
         if not EXPERT_CSV.exists():
@@ -160,7 +179,7 @@ def main():
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{out_name}.json"
+    out_path = out_dir / f"{out_name}_{args.method}.json"
     with open(out_path, "w") as f:
         json.dump(counts, f, indent=2)
 

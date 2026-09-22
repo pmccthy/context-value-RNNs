@@ -22,7 +22,7 @@ cxval.analysis / model_responders.py) -- run in your cxval env:
     cd context-value-RNNs
     python3 unified_figures/analysis/responder_stability_sweep.py \
         --data unified_figures/transfer/figure_data \
-        --out unified_figures/output/decoding/responder_stability.json
+        --out unified_figures/figs/decoding/responder_stability.json
 
 (~10 trial-counts x ~30 seeds x 3 model types x 2 methods; a few minutes.)
 """
@@ -48,7 +48,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", default=str(_HERE.parent / "transfer" / "figure_data"),
                     help="figure_data dir with a time_resolved/ subfolder (pre-reversal by default)")
-    ap.add_argument("--out", default=str(_HERE.parent / "output" / "decoding" / "responder_stability.json"))
+    ap.add_argument("--out", default=str(_HERE.parent / "figs" / "decoding" / "responder_stability.json"))
     ap.add_argument("--model-types", nargs="*", default=MODEL_TYPES)
     ap.add_argument("--n-trials-grid", nargs="*", type=int, default=N_TRIALS_GRID)
     ap.add_argument("--rng-seed", type=int, default=0)

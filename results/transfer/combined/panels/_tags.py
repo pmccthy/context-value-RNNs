@@ -27,7 +27,7 @@ plt.style.use(str(STYLE_DIR / "model_figure_style.mplstyle"))
 # from panel modules, same way the experimental repo's panels import _common.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-FIG_ROOT = Path(__file__).resolve().parent.parent / "output"   # .../unified_figures/output
+FIG_ROOT = Path(__file__).resolve().parent.parent / "figs"   # .../unified_figures/figs
 
 SHOW_TAG = True   # global default; individual saves can override
 
@@ -80,7 +80,7 @@ def _norm_tag(tag):
 
 
 def save_panel(fig, folder, tag, name, show_tag=None):
-    """Save a figure into output/<folder>/<tag>__<name>.png with its tag."""
+    """Save a figure into figs/<folder>/<tag>__<name>.png with its tag."""
     folder = _norm_folder(folder)
     tag = _norm_tag(tag)
     out_dir = FIG_ROOT / folder
@@ -89,6 +89,7 @@ def save_panel(fig, folder, tag, name, show_tag=None):
     stamp_tag(fig, tag, show_tag)
     path = out_dir / f"{tag}__{name}.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
+    fig.savefig(path.with_suffix(".pdf"), bbox_inches="tight")   # vector companion, every panel
     plt.close(fig)
-    print(f"  {tag:24} -> {folder}/{path.name}")
+    print(f"  {tag:24} -> {folder}/{path.name} (+ .pdf)")
     return path

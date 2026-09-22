@@ -21,6 +21,8 @@ from _tags import new_panel, save_panel  # noqa: E402
 import style as S  # noqa: E402
 import figures as F  # noqa: E402  (transfer_final/code/figures.py)
 import model_group_categories as MG  # noqa: E402
+import model_responders as MR  # noqa: E402
+import _method  # noqa: E402
 
 FIGURE_DATA_DIR = _HERE.parent / "transfer" / "figure_data"
 TIME_RESOLVED_DIR = FIGURE_DATA_DIR / "time_resolved"
@@ -28,8 +30,12 @@ MODEL_TYPES = ["rl_only", "classif_rl", "classif_rl_readout_only"]
 STIM_ORDER = ["0", "50", "100"]   # matches figures.py stim index 0,1,2
 
 
-def _load_D():
-    return F.load(str(FIGURE_DATA_DIR))
+def _load_D(method=None):
+    """method: None (uses _method.METHOD / RESPONDER_METHOD env default),
+    "time_averaged", or "temporal". Only pre-reversal data is loaded here
+    (this module is pre-reversal only), so "temporal" always has the raw
+    time_resolved data it needs -- no FileNotFoundError possible."""
+    return _method.load_D(F, MR, FIGURE_DATA_DIR, method)
 
 
 # --------------------------------------------------------------------------- #
@@ -59,16 +65,18 @@ def draw_population_activity_bar(model_type, D=None, ax=None):
     return fig
 
 
-def build_population_activity(show_tag=None):
-    D = _load_D()
+def build_population_activity(show_tag=None, method=None):
+    method = method or _method.METHOD
+    D = _load_D(method)
     for mt in MODEL_TYPES:
         try:
             fig = draw_population_activity_bar(mt, D=D)
         except Exception as e:
             print(f"  (skip population activity for {mt}: {e})")
             continue
-        save_panel(fig, "Transfer/Population activity", f"TRANSFER.popact.{mt}",
-                   f"{mt}_population_activity", show_tag)
+        save_panel(fig, f"Transfer/Population activity/{method}",
+                   f"TRANSFER.popact.{mt}.{method}",
+                   f"{mt}_population_activity_{method}", show_tag)
 
 
 # --------------------------------------------------------------------------- #
@@ -102,16 +110,17 @@ def draw_responder_group_bar(model_type, D=None, include_nonresp=True, ax=None):
     return fig
 
 
-def build_responder_groups(show_tag=None):
-    D = _load_D()
+def build_responder_groups(show_tag=None, method=None):
+    method = method or _method.METHOD
+    D = _load_D(method)
     for mt in MODEL_TYPES:
         try:
             fig = draw_responder_group_bar(mt, D=D)
         except Exception as e:
             print(f"  (skip responder groups for {mt}: {e})")
             continue
-        save_panel(fig, "Transfer/Subgroups", f"TRANSFER.respgroups.{mt}",
-                   f"{mt}_responder_groups_fine", show_tag)
+        save_panel(fig, f"Transfer/Subgroups/fine_{method}", f"TRANSFER.respgroups.{mt}.{method}",
+                   f"{mt}_responder_groups_fine_{method}", show_tag)
 
 
 # --------------------------------------------------------------------------- #
@@ -137,22 +146,24 @@ def draw_responder_group_bar_broad(model_type, D=None, include_nonresp=True, ax=
     return fig
 
 
-def build_responder_groups_broad(show_tag=None):
-    D = _load_D()
+def build_responder_groups_broad(show_tag=None, method=None):
+    method = method or _method.METHOD
+    D = _load_D(method)
     for mt in MODEL_TYPES:
         try:
             fig = draw_responder_group_bar_broad(mt, D=D)
         except Exception as e:
             print(f"  (skip broad responder groups for {mt}: {e})")
             continue
-        save_panel(fig, "Transfer/Subgroups", f"TRANSFER.respgroups_broad.{mt}",
-                   f"{mt}_responder_groups_broad", show_tag)
+        save_panel(fig, f"Transfer/Subgroups/broad_{method}", f"TRANSFER.respgroups_broad.{mt}.{method}",
+                   f"{mt}_responder_groups_broad_{method}", show_tag)
 
 
-def build_all(show_tag=None):
-    build_population_activity(show_tag)
-    build_responder_groups(show_tag)
-    build_responder_groups_broad(show_tag)
+def build_all(show_tag=None, methods=("time_averaged", "temporal")):
+    for method in methods:
+        build_population_activity(show_tag, method=method)
+        build_responder_groups(show_tag, method=method)
+        build_responder_groups_broad(show_tag, method=method)
 
 
 if __name__ == "__main__":

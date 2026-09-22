@@ -40,10 +40,10 @@ Needs sklearn (same requirement as run_decoding.py). Run in your cxval env:
     python3 unified_figures/analysis/run_time_resolved_decoding.py \
         --pre unified_figures/transfer/figure_data \
         --post unified_figures/transfer/figure_data_reversal \
-        --out unified_figures/output/decoding_tr
+        --out unified_figures/figs/decoding_tr
 
 For the 5k horizon: point --post at figure_data_reversal_5k and --out at
-output/decoding_tr_5k (i.e. REV_TAG=_5k's paths), matching run_decoding.py's
+figs/decoding_tr_5k (i.e. REV_TAG=_5k's paths), matching run_decoding.py's
 own REV_TAG convention.
 
 Runtime: ~500 LinearSVC fits per seed per model (3 pairs + 3 stims, x 11
@@ -159,7 +159,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pre", default=str(_HERE.parent / "transfer" / "figure_data"))
     ap.add_argument("--post", default=str(_HERE.parent / "transfer" / "figure_data_reversal"))
-    ap.add_argument("--out", default=str(_HERE.parent / "output" / "decoding_tr"))
+    ap.add_argument("--out", default=str(_HERE.parent / "figs" / "decoding_tr"))
     ap.add_argument("--model-types", nargs="*", default=MODEL_TYPES)
     args = ap.parse_args()
 

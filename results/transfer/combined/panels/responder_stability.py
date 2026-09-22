@@ -2,7 +2,7 @@
 proportions as a function of trials-per-stimulus used -- the comparison that
 justified adopting the old test for all shipped figures, as an actual panel
 rather than a one-off printout. Data: analysis/responder_stability_sweep.py's
-output/decoding/responder_stability.json (needs a real cxval-env rerun; see
+figs/decoding/responder_stability.json (needs a real cxval-env rerun; see
 that script's docstring for the exact command).
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ sys.path.insert(0, str(_HERE.parent / "transfer" / "code"))
 from _tags import new_panel, save_panel  # noqa: E402
 import figures as F  # noqa: E402
 
-STAB_JSON = _HERE.parent / "output" / "decoding" / "responder_stability.json"
+STAB_JSON = _HERE.parent / "figs" / "decoding" / "responder_stability.json"
 MODEL_TYPES = ["rl_only", "classif_rl", "classif_rl_readout_only"]
 
 OLD_COLOUR = "#3377bb"

@@ -122,8 +122,8 @@ for corrB in (False, True):
     print(keyB, "done")
 
 import json
-Path("output/analysis").mkdir(parents=True, exist_ok=True)
-json.dump(results, open("output/analysis/alpha_sweep.json", "w"), indent=2)
+Path("figs/analysis").mkdir(parents=True, exist_ok=True)
+json.dump(results, open("figs/analysis/alpha_sweep.json", "w"), indent=2)
 
 fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
 styles = {"A_raw": dict(color="#1f77b4", ls="-", label="Method A (window-mean), uncorrected"),
@@ -143,5 +143,5 @@ axes[0].legend(frameon=False, fontsize=7, loc="upper left")
 fig.suptitle(f"Responder-significance rate vs. alpha ({MODEL_TYPE}, pre-reversal, all seeds pooled)",
              fontsize=11)
 fig.tight_layout()
-fig.savefig("output/analysis/alpha_sweep.png", dpi=150)
-print("saved output/analysis/alpha_sweep.png")
+fig.savefig("figs/analysis/alpha_sweep.png", dpi=150)
+print("saved figs/analysis/alpha_sweep.png")

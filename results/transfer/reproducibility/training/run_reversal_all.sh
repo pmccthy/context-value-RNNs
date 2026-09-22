@@ -22,6 +22,20 @@ CHECKPOINT_FINE_UNTIL="${CHECKPOINT_FINE_UNTIL:-$CHECKPOINT_EVERY}"  # fine-reso
                                              # right after the reversal starts (default:
                                              # fills the first coarse interval)
 CHECKPOINT_FINE_EVERY="${CHECKPOINT_FINE_EVERY:-1}"   # fine-window interval (default: every update)
+TRACK_GRADIENTS="${TRACK_GRADIENTS:-0}"     # 1 = pass --track-gradients (per-head grad
+                                             # norms + raw policy/value loss scalars --
+                                             # see train_reversal.py's --track-gradients
+                                             # help text; cheap, scalars only)
+PARALLEL_JOBS="${PARALLEL_JOBS:-1}"         # >1 = run this many (model_type, seed) reversal
+                                             # trainings concurrently via xargs -P. Each
+                                             # individual run is itself lightly
+                                             # multi-threaded (torch intra-op parallelism),
+                                             # so oversubscribing cores can slow things down
+                                             # more than it helps -- see the printed note
+                                             # below, and consider also setting
+                                             # OMP_NUM_THREADS=1 / MKL_NUM_THREADS=1 in the
+                                             # environment when PARALLEL_JOBS>1 so each
+                                             # worker uses one core instead of contending.
 
 if [ ! -d "$RUNS" ]; then
   echo "ERROR: RUNS directory does not exist: $RUNS" >&2
@@ -32,8 +46,8 @@ fi
 
 n_found=0
 n_missing=0
-n_done=0
 missing_list=()
+todo_list=()
 
 for MT in classif_rl rl_only classif_rl_readout_only; do
   for s in $SEEDS; do
@@ -44,11 +58,7 @@ for MT in classif_rl rl_only classif_rl_readout_only; do
       continue
     fi
     n_found=$((n_found + 1))
-    echo ">> reversal $MT seed$s  (n_trials=$N_TRIALS)"
-    "$PY" "$HERE/train_reversal.py" --run "$RUNS/$MT/seed$s" --out "$OUT/$MT/seed$s" \
-        --n-trials "$N_TRIALS" --checkpoint-every "$CHECKPOINT_EVERY" \
-        --checkpoint-fine-until "$CHECKPOINT_FINE_UNTIL" --checkpoint-fine-every "$CHECKPOINT_FINE_EVERY"
-    n_done=$((n_done + 1))
+    todo_list+=("$MT $s")
   done
 done
 
@@ -62,6 +72,40 @@ if [ "$n_found" -eq 0 ]; then
   echo "       Check that RUNS points at a directory containing <model_type>/seed<NN>/model.pt," >&2
   echo "       e.g. RUNS=$HERE/../../model_runs (this run's default)." >&2
   exit 1
+fi
+
+TG_FLAG_STR=""
+if [ "$TRACK_GRADIENTS" = "1" ]; then
+  TG_FLAG_STR="--track-gradients"
+fi
+
+run_one() {
+  # $1 = model_type, $2 = seed -- one (model_type, seed) reversal training run.
+  # TG_FLAG_STR is either "" or "--track-gradients" -- deliberately unquoted below
+  # so an empty value word-splits away to nothing rather than being passed as a
+  # literal empty-string argument.
+  local MT="$1" s="$2"
+  echo ">> reversal $MT seed$s  (n_trials=$N_TRIALS)"
+  "$PY" "$HERE/train_reversal.py" --run "$RUNS/$MT/seed$s" --out "$OUT/$MT/seed$s" \
+      --n-trials "$N_TRIALS" --checkpoint-every "$CHECKPOINT_EVERY" \
+      --checkpoint-fine-until "$CHECKPOINT_FINE_UNTIL" --checkpoint-fine-every "$CHECKPOINT_FINE_EVERY" \
+      $TG_FLAG_STR
+}
+export -f run_one
+export PY HERE RUNS OUT N_TRIALS CHECKPOINT_EVERY CHECKPOINT_FINE_UNTIL CHECKPOINT_FINE_EVERY TG_FLAG_STR
+
+n_done=0
+if [ "$PARALLEL_JOBS" -le 1 ]; then
+  for pair in "${todo_list[@]}"; do
+    run_one $pair
+    n_done=$((n_done + 1))
+  done
+else
+  echo "-- running with PARALLEL_JOBS=$PARALLEL_JOBS (each worker is itself lightly"
+  echo "   multi-threaded; set OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 in the environment"
+  echo "   before calling this script if workers seem to be contending for cores) --"
+  printf '%s\n' "${todo_list[@]}" | xargs -P "$PARALLEL_JOBS" -L 1 bash -c 'run_one "$@"' _
+  n_done="$n_found"   # xargs -e propagates a nonzero exit below on any failure
 fi
 
 if [ "$n_done" -ne "$n_found" ]; then

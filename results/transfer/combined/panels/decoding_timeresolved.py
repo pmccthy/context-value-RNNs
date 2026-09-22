@@ -37,10 +37,10 @@ import style as S  # noqa: E402
 MODEL_TYPES = ["rl_only", "classif_rl", "classif_rl_readout_only"]
 # Must match run_time_resolved_decoding.py's --out for this REV_TAG (e.g.
 # REV_TAG=_5k python3 analysis/run_time_resolved_decoding.py --post
-# .../figure_data_reversal_5k --out unified_figures/output/decoding_tr_5k).
+# .../figure_data_reversal_5k --out unified_figures/figs/decoding_tr_5k).
 REV_TAG = os.environ.get("REV_TAG", "")
 HORIZON_LABEL = f" [{REV_TAG.lstrip('_')} horizon]" if REV_TAG else ""
-TR_JSON = _HERE.parent / "output" / f"decoding_tr{REV_TAG}" / "time_resolved_decode.json"
+TR_JSON = _HERE.parent / "figs" / f"decoding_tr{REV_TAG}" / "time_resolved_decode.json"
 
 PAIR_LABELS = {"0-1": "0% vs 50%", "0-2": "0% vs 100%", "1-2": "50% vs 100%"}
 PAIR_COLOURS = {"0-1": "#bebada", "0-2": "#fb8072", "1-2": "#8dd3c7"}

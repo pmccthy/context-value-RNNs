@@ -38,11 +38,11 @@ MODEL_TYPES = ["rl_only", "classif_rl", "classif_rl_readout_only"]
 # "" = decode against the 2500-trial reversal run's figure_data_reversal,
 # "_5k" = the longer run -- must match run_decoding.py's --out for this tag
 # (e.g. `REV_TAG=_5k python3 analysis/run_decoding.py --post .../figure_data_reversal_5k
-#  --out unified_figures/output/decoding_5k`), and this module reads it back
-# from output/decoding{REV_TAG}/ to match.
+#  --out unified_figures/figs/decoding_5k`), and this module reads it back
+# from figs/decoding{REV_TAG}/ to match.
 REV_TAG = os.environ.get("REV_TAG", "")
 HORIZON_LABEL = f" [{REV_TAG.lstrip('_')} horizon]" if REV_TAG else ""
-DECODE_JSON = _HERE.parent / "output" / f"decoding{REV_TAG}" / "crosscontext_decode_stim_average.json"
+DECODE_JSON = _HERE.parent / "figs" / f"decoding{REV_TAG}" / "crosscontext_decode_stim_average.json"
 
 
 def _load():
@@ -86,7 +86,7 @@ def draw_crosscontext_bar(results=None, ax=None):
     ax.set_xticks(x)
     ax.set_xticklabels([F.MODELS[m]["label"] for m in MODEL_TYPES], rotation=20, ha="right")
     ax.set_ylim(0.4, 1.02)
-    ax.set_ylabel("accuracy")
+    ax.set_ylabel("pre→post accuracy")
     ax.set_title("Does the stimulus code survive reversal?\n(mean of pre→post & post→pre)")
     ax.legend(frameon=False)
     return fig

@@ -28,7 +28,7 @@ import numpy as np, torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cxval.models import RNN
 from cxval.batched import generate_batch
-from cxval.vigour import VigourActorCritic, BatchedVigourEnv, train_vigour, infer_vigour, infer_value
+from cxval.vigour import VigourActorCritic, BatchedVigourEnv, train_vigour, infer_vigour, infer_value, infer_rpe
 from cxval.analysis import responsive_proportions_ttest
 
 
@@ -111,10 +111,19 @@ def make_probe(value_matrix, cost, centroids_pre=None):
         # as infer_vigour, real training-time curve, not terminal_rpe.py's reconstruction.
         vval = infer_value(model, value_matrix, n_eval_episodes=4,
                            n_trials_per_episode=150, vigour_cost=cost)
+        # genuine trial-resolved TD-error (RPE), same rollout budget as the value/vigour
+        # probes above -- properly includes the vigour-cost term already, since infer_rpe
+        # rolls a real BatchedVigourEnv with the same vigour_cost (see cxval.vigour.infer_rpe
+        # and BatchedVigourEnv.step -- the reward it uses is (v*base - effort(v))*active,
+        # exactly the reward the agent is actually trained on). This is the REAL thing,
+        # not the reconstructed post-hoc proxy in combined/panels/rpe_proxy.py.
+        rpe = infer_rpe(model, value_matrix, n_eval_episodes=4, n_trials_per_episode=150,
+                        vigour_cost=cost)
         out = {"vigour": [float(vmean[s]) for s in range(3)],
                "pop_activity": tuning.mean(1).astype(float).tolist(),
                "frac_responsive": np.asarray(rp["frac_per_stim"], float).tolist(),
                "value": [float(vval[s]) for s in range(3)],
+               "rpe": [float(rpe[s]) for s in range(3)],
                "stim_decode": _quick_stim_decode(R, stim)}
         if centroids_pre is not None:
             out["crosscontext_decode"] = _quick_crosscontext_decode(R, stim, centroids_pre)
@@ -164,6 +173,12 @@ def main():
     ap.add_argument("--checkpoint-fine-every", type=int, default=1,
                     help="fine-window checkpoint interval (default: every "
                          "update).")
+    ap.add_argument("--track-gradients", action="store_true",
+                    help="log per-parameter-group gradient norms (pre-clip) and the "
+                         "raw policy_loss/value_loss scalars every update -- see "
+                         "cxval.vigour.train_vigour's track_gradients kwarg. Cheap "
+                         "(scalars only, no gradient tensors kept), off by default "
+                         "for backward compatibility with existing invocations.")
     ap.add_argument("--device", default="cpu")
     args = ap.parse_args()
     run = Path(args.run); out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
@@ -203,6 +218,7 @@ def main():
                      checkpoint_dir=checkpoint_dir, checkpoint_every=args.checkpoint_every,
                      checkpoint_fine_until=fine_until,
                      checkpoint_fine_every=args.checkpoint_fine_every,
+                     track_gradients=args.track_gradients,
                      **tr)
 
     post_reward = eval_reward(o["model"].cpu().eval(), VM_rev, cost)  # reversed model, reversed task
@@ -228,8 +244,26 @@ def main():
         "probe_pop_activity": o["history"].get("probe_pop_activity", []),
         "probe_frac_responsive": o["history"].get("probe_frac_responsive", []),
         "probe_value": o["history"].get("probe_value", []),
+        "probe_rpe": o["history"].get("probe_rpe", []),                 # each: [rpe0, rpe50, rpe100] -- genuine TD error, not a proxy
         "probe_stim_decode": o["history"].get("probe_stim_decode", []),
         "probe_crosscontext_decode": o["history"].get("probe_crosscontext_decode", []),
+        # Per-update loss terms -- aux_loss (SSL/stim_head cross-entropy) and grad_norm
+        # (post-clip global norm) are always computed by train_vigour regardless of
+        # track_gradients; activity_loss/nonneg_loss only appear if those penalty coefs
+        # are >0 in this run's config (else .get(...) below just yields an empty list).
+        "aux_loss": o["history"].get("aux_loss", []),
+        "activity_loss": o["history"].get("activity_loss", []),
+        "nonneg_loss": o["history"].get("nonneg_loss", []),
+        "grad_norm": o["history"].get("grad_norm", []),                 # global grad norm, POST-clip
+        # Only populated when --track-gradients is passed (see cxval.vigour.train_vigour):
+        # per-parameter-group PRE-clip gradient norms, plus the raw policy/value loss scalars.
+        "policy_loss": o["history"].get("policy_loss", []),
+        "value_loss": o["history"].get("value_loss", []),
+        "grad_norm_backbone": o["history"].get("grad_norm_backbone", []),
+        "grad_norm_vigour_head": o["history"].get("grad_norm_vigour_head", []),
+        "grad_norm_value_head": o["history"].get("grad_norm_value_head", []),
+        "grad_norm_stim_head": o["history"].get("grad_norm_stim_head", []),
+        "track_gradients": bool(args.track_gradients),
     }, indent=2) + "\n")
 
     print(f"[{cfg['model_type']} seed{cfg['seed']}] diverged={int(o['diverged'])}  "

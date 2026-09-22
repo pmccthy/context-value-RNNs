@@ -36,6 +36,14 @@ import decoding as decoding_panels
 import decoding_timeresolved as decoding_timeresolved_panels
 import population_timeresolved as population_timeresolved_panels
 import responder_stability as responder_stability_panels
+import reversal_gradient_bars as reversal_gradient_bars_panels
+import population_pca_panels as population_pca_panels
+import population_tdr_panels as population_tdr_panels
+import weight_change as weight_change_panels
+import circuit_diagram as circuit_diagram_panels
+import coding_angle_panel as coding_angle_panels
+import terminal_rpe as terminal_rpe_panels
+import rpe_proxy as rpe_proxy_panels
 
 
 def main():
@@ -48,6 +56,14 @@ def main():
     print("Decoding (time-resolved):"); decoding_timeresolved_panels.build_all()
     print("Population/tuning (time-resolved):"); population_timeresolved_panels.build_all()
     print("Responder stability:"); responder_stability_panels.build_all()
+    print("Reversal gradient bars:"); reversal_gradient_bars_panels.build_all()
+    print("PCA state space (time-resolved):"); population_pca_panels.build_all()
+    print("TDR state space (time-resolved):"); population_tdr_panels.build_all()
+    print("Weight change through learning:"); weight_change_panels.build_all()
+    print("Effective circuit diagrams:"); circuit_diagram_panels.build_all()
+    print("Coding-vector angles:"); coding_angle_panels.build_all()
+    print("Terminal RPE vs trials:"); terminal_rpe_panels.build_all()
+    print("Reconstructed RPE proxy vs trials:"); rpe_proxy_panels.build_all()
     print("\nPanels root ->", _tags.FIG_ROOT)
 
 

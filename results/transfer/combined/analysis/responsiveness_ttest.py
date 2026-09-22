@@ -23,11 +23,16 @@ from scipy.stats import ttest_ind
 # --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #
-def _upsample_axis(arr: np.ndarray, n_target: int, axis: int = 1) -> np.ndarray:
-    """Linearly resample ``arr`` along ``axis`` to ``n_target`` samples.
+def _resample_axis(arr: np.ndarray, n_target: int, axis: int = 1) -> np.ndarray:
+    """Linearly resample ``arr`` along ``axis`` to ``n_target`` samples -- works
+    for either upsampling (n_target > n_src) or downsampling (n_target < n_src),
+    same fractional-position (0..1) interpolation either way.
 
     Stand-in for the notebook's ``utils.upsample_nd`` (only ever used to equalise
-    the two windows' timepoint counts before the timepoint-wise t-test).
+    the two windows' timepoint counts before the timepoint-wise t-test). Kept
+    the original name as an alias below since the real-data pipeline's default
+    usage (equal-length windows -> never hits this branch) is unaffected either
+    way.
     """
     n_src = arr.shape[axis]
     if n_src == n_target:
@@ -43,28 +48,52 @@ def _upsample_axis(arr: np.ndarray, n_target: int, axis: int = 1) -> np.ndarray:
     return np.moveaxis(out, 0, axis)
 
 
-def t_test_temporal(cond_A, cond_B, timepoints=(), multiple_test=None):
+_upsample_axis = _resample_axis  # backward-compat alias (name no longer accurate for downsample use)
+
+
+def t_test_temporal(cond_A, cond_B, timepoints=(), multiple_test=None, resize="upsample"):
     """Independent t-test at each timepoint between condition A and B, per neuron.
 
     ``cond_A``/``cond_B`` are ``(n_trials, n_timepoints, n_neurons)`` (a 2-D
     ``(n_trials, n_timepoints)`` array is treated as a single neuron). Returns
-    ``t_vals, p_vals`` each shaped ``(n_timepoints, n_neurons)``. If the two
-    inputs differ in timepoint count the shorter one is linearly upsampled, as
-    in the notebook. ``multiple_test`` mirrors the notebook argument; the default
-    (``None``) leaves p-values uncorrected across timepoints (the notebook's main
-    run), any other value applies a Benjamini-Hochberg FDR per neuron.
+    ``t_vals, p_vals`` each shaped ``(n_timepoints, n_neurons)``.
+
+    If the two inputs differ in timepoint count, ``resize`` picks which one is
+    linearly resampled to match the other (same fractional-position interp
+    either way -- see _resample_axis):
+      "upsample" (default, matches the original notebook): the SHORTER window
+        is stretched up to the LONGER one's length -- this is what the
+        real-data pipeline uses (irrelevant there in practice since both
+        windows are already equal-length/equal-fs), and remains the default
+        so nothing that doesn't pass ``resize`` explicitly changes behaviour.
+      "downsample": the LONGER window is compressed down to the SHORTER one's
+        native length instead -- e.g. on the model side, where the ITI/
+        baseline window often has fewer native timepoints than the stimulus
+        window, this avoids inventing interpolated baseline samples and
+        instead subsamples (via linear interpolation) the stimulus window
+        down to the baseline's real timepoint count -- see model_responders.py.
+
+    ``multiple_test`` mirrors the notebook argument; the default (``None``)
+    leaves p-values uncorrected across timepoints (the notebook's main run),
+    any other value applies a Benjamini-Hochberg FDR per neuron.
     """
     cond_A = np.asarray(cond_A)
     cond_B = np.asarray(cond_B)
     if cond_A.shape[1] != cond_B.shape[1]:
         lens = [cond_A.shape[1], cond_B.shape[1]]
-        longer = int(np.argmax(lens))
-        shorter = int(np.argmin(lens))
-        up = _upsample_axis([cond_A, cond_B][shorter], lens[longer], axis=1)
-        if shorter == 0:
-            cond_A = up
+        if resize == "upsample":
+            target_idx = int(np.argmin(lens))    # the shorter one gets resized...
+            target_len = int(np.max(lens))        # ...up to the longer one's length
+        elif resize == "downsample":
+            target_idx = int(np.argmax(lens))    # the longer one gets resized...
+            target_len = int(np.min(lens))         # ...down to the shorter one's length
         else:
-            cond_B = up
+            raise ValueError(f"bad resize: {resize!r} (want 'upsample' or 'downsample')")
+        resized = _resample_axis([cond_A, cond_B][target_idx], target_len, axis=1)
+        if target_idx == 0:
+            cond_A = resized
+        else:
+            cond_B = resized
     assert cond_A.shape[1] == cond_B.shape[1], (
         f"timepoint mismatch: {cond_A.shape[1]} != {cond_B.shape[1]}")
 
@@ -152,7 +181,8 @@ def scale_per_neuron(y_window):
 
 
 def responders_from_windows(baseline, stim, alpha=0.05, max_int=3,
-                            frac=1.0 / 3.0, scale=True, multiple_test=None):
+                            frac=1.0 / 3.0, scale=True, multiple_test=None,
+                            resize="upsample"):
     """Per-neuron responsiveness from baseline & stimulus windows.
 
     ``baseline`` and ``stim`` are ``(n_trials, n_timepoints, n_neurons)`` arrays
@@ -163,7 +193,15 @@ def responders_from_windows(baseline, stim, alpha=0.05, max_int=3,
       ``run``     (n_neurons,) int     longest tolerated-contiguous sig run
 
     When ``scale`` is True both windows are z-scored per neuron together (so the
-    reported effect size is in comparable, ~z units).
+    reported effect size is in comparable, ~z units). NOTE: scaling pools
+    baseline+stim BEFORE any resize below, so it's computed over each window's
+    own native samples regardless of ``resize``.
+
+    ``resize`` is passed straight through to t_test_temporal -- "upsample"
+    (default, original behaviour) or "downsample"; see that function's
+    docstring. Only matters when baseline/stim have different native
+    timepoint counts (never happens for the real imaging windows; routinely
+    happens for the model's ITI-vs-stim windows -- see model_responders.py).
     """
     baseline = np.asarray(baseline, dtype=float)
     stim = np.asarray(stim, dtype=float)
@@ -173,7 +211,7 @@ def responders_from_windows(baseline, stim, alpha=0.05, max_int=3,
         pooled = scale_per_neuron(pooled)
         baseline, stim = pooled[:, :nb], pooled[:, nb:]
 
-    _, p_vals = t_test_temporal(baseline, stim, multiple_test=multiple_test)
+    _, p_vals = t_test_temporal(baseline, stim, multiple_test=multiple_test, resize=resize)
     n_timepoints, n_neurons = p_vals.shape
     thresh = frac * n_timepoints
     sig = np.zeros(n_neurons, dtype=bool)

@@ -21,6 +21,8 @@ from _tags import new_panel, save_panel  # noqa: E402
 import style as S  # noqa: E402
 import figures as F  # noqa: E402
 import model_group_categories as MG  # noqa: E402
+import model_responders as MR  # noqa: E402
+import _method  # noqa: E402
 from chi2_metrics import chi2_shape_fit  # noqa: E402
 
 MODEL_TYPES = ["rl_only", "classif_rl", "classif_rl_readout_only"]
@@ -29,8 +31,19 @@ FINE_ORDER = ["0%-only", "50%-only", "100%-only", "0% & 50%", "0% & 100%", "50% 
 BROAD_ORDER = ["0%", "50%", "100%"]
 
 
-def _load_D():
-    return F.load(str(_HERE.parent / "transfer" / "figure_data"))
+def _load_D(method=None):
+    """Pre-reversal model D. method: None (uses _method.METHOD), "time_averaged",
+    or "temporal" -- both fully supported here (pre-reversal time_resolved data
+    has always existed)."""
+    return _method.load_D(F, MR, _HERE.parent / "transfer" / "figure_data", method)
+
+
+def _real_groups(name, method):
+    """Load the real (neural-data) group-count json matching `method` -- see
+    cross_model_vs_experiment/extract_experiment_group_counts.py --method.
+    `name` is "expert", "reversal_pre", or "reversal_post"."""
+    import json
+    return json.load(open(GROUP_COUNTS / f"{name}_{method}.json"))
 
 
 def _chi2_cat(obs, real_dict, order):
@@ -47,7 +60,7 @@ def _broad_from_fine(fine_arr):
             g("100%-only") + g("0% & 100%") + g("50% & 100%") + g("all three")]
 
 
-def _bar_by_model(ax, values, ylabel, title, lower_is_better=True):
+def _bar_by_model(ax, values, ylabel, title, lower_is_better=True, ylim=None):
     types = MODEL_TYPES
     x = np.arange(len(types))
     vals = [values[m] for m in types]
@@ -60,6 +73,8 @@ def _bar_by_model(ax, values, ylabel, title, lower_is_better=True):
     ax.set_xticklabels([F.MODELS[m]["label"] for m in types], rotation=20, ha="right")
     ax.set_ylabel(ylabel)
     ax.set_title(title + f"\nbest: {F.MODELS[best]['label']}")
+    if ylim is not None:
+        ax.set_ylim(*ylim)
 
 
 def draw_pop_activity_chi2(D=None, ax=None):
@@ -81,8 +96,9 @@ def draw_pop_activity_chi2(D=None, ax=None):
         arr = D["scalars"]["pop_activity"][ti]
         obs = np.array([float(np.nanmean(arr[:, si])) for si in range(3)])
         vals[mt] = float(np.corrcoef(obs, real_v)[0, 1])
-    _bar_by_model(ax, vals, "Pearson r (pop. activity profile vs. expert data)",
-                  "Population activity profile: model vs. expert data", lower_is_better=False)
+    _bar_by_model(ax, vals, "Pearson r (pop. activity profile)",
+                  "Population activity profile: model vs. expert data", lower_is_better=False,
+                  ylim=(0.8, 1.0))
     return fig
 
 
@@ -103,28 +119,32 @@ def draw_vigour_correlation(D=None, ax=None):
         arr = D["scalars"]["vigour"][ti]
         obs = np.array([float(np.nanmean(arr[:, si])) for si in range(3)])
         vals[mt] = float(np.corrcoef(obs, real_v)[0, 1])
-    _bar_by_model(ax, vals, "Pearson r (vigour profile vs. expert data)",
-                  "Vigour profile: model vs. expert data", lower_is_better=False)
+    _bar_by_model(ax, vals, "Pearson r (vigour profile)",
+                  "Vigour profile: model vs. expert data", lower_is_better=False,
+                  ylim=(0.8, 1.0))
     return fig
 
 
-def draw_fine_groups_chi2(D=None, ax=None):
+def draw_fine_groups_chi2(D=None, ax=None, method=None):
+    method = method or _method.METHOD
     fig, ax, _ = new_panel(ax, figsize=(5.2, 4.5))
-    D = D if D is not None else _load_D()
-    real = json.load(open(GROUP_COUNTS / "expert.json"))
+    D = D if D is not None else _load_D(method)
+    real = _real_groups("expert", method)
     vals = {}
     for mt in MODEL_TYPES:
         fine, _ = MG.fine_counts_pooled(D, mt)
         vals[mt] = _chi2_cat(fine, real, FINE_ORDER)
     _bar_by_model(ax, vals, r"$\chi^2$ (fine groups)",
-                  "Responder groups (fine, 7-way): model vs. expert data")
+                  f"Responder groups (fine, 7-way): model vs. expert data\n"
+                  f"({_method.METHOD_LABEL[method]}, both sides)")
     return fig
 
 
-def draw_broad_groups_chi2(D=None, ax=None):
+def draw_broad_groups_chi2(D=None, ax=None, method=None):
+    method = method or _method.METHOD
     fig, ax, _ = new_panel(ax, figsize=(5.2, 4.5))
-    D = D if D is not None else _load_D()
-    real_fine = json.load(open(GROUP_COUNTS / "expert.json"))
+    D = D if D is not None else _load_D(method)
+    real_fine = _real_groups("expert", method)
     real_broad = dict(zip(BROAD_ORDER, _broad_from_fine([real_fine[k] for k in FINE_ORDER])))
     vals = {}
     for mt in MODEL_TYPES:
@@ -132,24 +152,42 @@ def draw_broad_groups_chi2(D=None, ax=None):
         broad = _broad_from_fine(list(fine))
         vals[mt] = _chi2_cat(broad, real_broad, BROAD_ORDER)
     _bar_by_model(ax, vals, r"$\chi^2$ (broad groups)",
-                  "Responder groups (broad, 3-way): model vs. expert data")
+                  f"Responder groups (broad, 3-way): model vs. expert data\n"
+                  f"({_method.METHOD_LABEL[method]}, both sides)")
     return fig
 
 
-def build_all(show_tag=None):
-    D = _load_D()
+def build_all(show_tag=None, methods=("time_averaged", "temporal")):
+    # pop-activity / vigour correlation don't depend on the responder-significance
+    # method at all (continuous scalars, not responsiveness tests) -- built once.
+    D0 = _load_D("time_averaged")
     for tag, name, fn in [
-        ("pop_activity", "population_activity_chi2", draw_pop_activity_chi2),
-        ("vigour_corr", "vigour_correlation", draw_vigour_correlation),
-        ("groups_fine", "responder_groups_fine_chi2", draw_fine_groups_chi2),
-        ("groups_broad", "responder_groups_broad_chi2", draw_broad_groups_chi2),
+        ("pop_activity", "comparison_population_activity_chi2", draw_pop_activity_chi2),
+        ("vigour_corr", "comparison_vigour_correlation", draw_vigour_correlation),
     ]:
         try:
-            fig = fn(D=D)
+            fig = fn(D=D0)
         except Exception as e:
             print(f"  (skip {tag}: {e})")
             continue
         save_panel(fig, "CrossModel/Chi2", f"CHI2.{tag}", name, show_tag)
+
+    # fine/broad group chi2 DOES depend on the responder method -- and, since
+    # this is a model-vs-real COMPARISON, the method is matched on both sides
+    # (temporal model vs temporal real; time-averaged model vs time-averaged
+    # real) rather than cross-combined, so the fit is always apples-to-apples.
+    for method in methods:
+        D = _load_D(method)
+        for tag, name, fn in [
+            ("groups_fine", f"comparison_responder_groups_fine_chi2_{method}", draw_fine_groups_chi2),
+            ("groups_broad", f"comparison_responder_groups_broad_chi2_{method}", draw_broad_groups_chi2),
+        ]:
+            try:
+                fig = fn(D=D, method=method)
+            except Exception as e:
+                print(f"  (skip {tag} [{method}]: {e})")
+                continue
+            save_panel(fig, f"CrossModel/Chi2_{method}", f"CHI2.{tag}.{method}", name, show_tag)
 
 
 if __name__ == "__main__":

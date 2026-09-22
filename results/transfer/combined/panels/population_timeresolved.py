@@ -37,6 +37,8 @@ sys.path.insert(0, str(_HERE.parent / "transfer" / "code"))
 from _tags import new_panel, save_panel  # noqa: E402
 import style as S  # noqa: E402
 import figures as F  # noqa: E402
+import model_responders as MR  # noqa: E402
+import _method  # noqa: E402
 
 MODEL_TYPES = ["rl_only", "classif_rl", "classif_rl_readout_only"]
 STIM_ORDER = ["0", "50", "100"]
@@ -76,10 +78,21 @@ def draw_population_mean_trace(model_type, D, ax=None, phase_label="pre"):
     return fig
 
 
-def draw_pooled_tuning_heatmap(model_type, D, ax=None, phase_label="pre", colorbar=True):
+def draw_pooled_tuning_heatmap(model_type, D, ax=None, phase_label="pre", colorbar=True,
+                               exclude_nonresp=False):
+    """All units pooled into one unit x stimulus tuning heatmap, sorted by
+    preferred stimulus. Units that are not a significant responder to ANY
+    stimulus (D["responsive"], the model's existing per-unit responder test)
+    are drawn as a separate block below a divider, sorted by plain peak value
+    (not grouped by preferred stimulus, which would misleadingly imply tuning
+    structure that didn't reach significance) -- same convention as the real
+    repo's subgroups.py _draw_matrix. Pass ``exclude_nonresp=True`` to drop
+    non-responding units entirely instead (no divider/lower block) -- same
+    option as the real repo's draw_pooled_heatmap(exclude_nonresp=...)."""
     fig, ax, _ = new_panel(ax, figsize=(3.8, 5.2))
     ti = D["model_types"].index(model_type)
     tuning = D["tuning"]["data"][ti]     # (seed, stim, unit), stim order = STIM_ORDER (0,50,100)
+    resp = D["responsive"]["data"][ti]   # (seed, unit, stim) bool, stim order = STIM_ORDER
     # Heatmap columns go 100% -> 0% (descending), matching the real repo's own
     # EXP_ORDER/REV_ORDER convention (subgroups.py: ["100_to_0","50","0_to_100"])
     # -- reverse of the ascending order used elsewhere (bars, traces).
@@ -87,21 +100,41 @@ def draw_pooled_tuning_heatmap(model_type, D, ax=None, phase_label="pre", colorb
     tuning = tuning[:, col_order, :]
     heat_labels = [STIM_ORDER[i] for i in col_order]
     mat = tuning.transpose(0, 2, 1).reshape(-1, tuning.shape[1])   # (seed*unit, stim)
+    any_resp = resp.any(axis=2).reshape(-1)                        # (seed*unit,) -- same flattening order
     finite_rows = np.isfinite(mat).all(axis=1)
     mat = mat[finite_rows]
+    any_resp = any_resp[finite_rows]
+    n_total = mat.shape[0]
+    if exclude_nonresp:
+        mat = mat[any_resp]
+        any_resp = any_resp[any_resp]
     peak = mat.max(axis=1); pref = mat.argmax(axis=1)
-    order = np.lexsort((-peak, pref))
+    resp_idx = np.where(any_resp)[0]
+    nonresp_idx = np.where(~any_resp)[0]
+    resp_order = resp_idx[np.lexsort((-peak[resp_idx], pref[resp_idx]))] if len(resp_idx) else resp_idx
+    nonresp_order = nonresp_idx[np.argsort(-peak[nonresp_idx])] if len(nonresp_idx) else nonresp_idx
+    order = np.concatenate([resp_order, nonresp_order])
+    n_resp = len(resp_order)
     vmax = float(np.nanpercentile(mat, 99)) if mat.size else 1.0
     im = ax.imshow(mat[order], aspect="auto", cmap="hot", vmin=0, vmax=vmax, interpolation="nearest")
-    # White dotted separators at preferred-stimulus group boundaries -- same
-    # convention as the real repo's _draw_matrix (subgroups.py).
-    for b in np.where(np.diff(pref[order]) != 0)[0]:
+    # White dotted separators at preferred-stimulus group boundaries within the
+    # responder block -- same convention as the real repo's _draw_matrix
+    # (subgroups.py) -- plus a solid divider above the non-responder block
+    # (omitted entirely when exclude_nonresp has dropped that block).
+    for b in np.where(np.diff(pref[resp_order]) != 0)[0]:
         ax.axhline(b + 0.5, color="white", lw=0.8, ls=(0, (1, 1.3)), alpha=0.9)
+    if 0 < n_resp < len(order):
+        ax.axhline(n_resp - 0.5, color="black", lw=1.4, ls="-", zorder=5)
     ax.set_xticks(range(len(heat_labels))); ax.set_xticklabels([f"{s}%" for s in heat_labels])
     ax.set_yticks([])
     tag = HORIZON_LABEL if phase_label == "post" else ""
-    ax.set_title(f"{F.MODELS[model_type]['label']}\nall units pooled, {phase_label} "
-                 f"(n={mat.shape[0]}){tag}", fontsize=10)
+    if exclude_nonresp:
+        title = (f"{F.MODELS[model_type]['label']}\nresponders only, {phase_label} "
+                 f"(n={n_resp}){tag}")
+    else:
+        title = (f"{F.MODELS[model_type]['label']}\nall units pooled, {phase_label} "
+                 f"(n={n_total}; {n_resp} responders above divider){tag}")
+    ax.set_title(title, fontsize=10)
     if colorbar:
         fig.colorbar(im, ax=ax, fraction=0.05, pad=0.03, label="mean activation")
     return fig
@@ -123,53 +156,71 @@ def draw_metric_bar(model_type, key, D, ax=None, ylabel=None, phase_label="pre")
     return fig
 
 
-def build_all(show_tag=None):
+def build_all(show_tag=None, methods=("time_averaged", "temporal")):
+    # population-mean-trace and the vigour bar don't touch D["responsive"] at
+    # all (they read aligned_mean / scalars), so they're method-independent --
+    # built once, outside the method loop, from the (unmodified) time-averaged D.
     try:
-        Dpre = F.load(str(FIGURE_DATA_DIR))
+        Dpre0 = F.load(str(FIGURE_DATA_DIR))
     except Exception as e:
         print(f"  (skip population/tuning time-resolved panels: pre figure_data not found: {e})")
         return
     try:
-        Dpost = F.load(str(FIGURE_DATA_REV_DIR))
+        Dpost0 = F.load(str(FIGURE_DATA_REV_DIR))
     except Exception as e:
-        Dpost = None
+        Dpost0 = None
         print(f"  (post-reversal figure_data{REV_TAG} not found -- pre-only panels this run: {e})")
 
     for mt in MODEL_TYPES:
         try:
-            save_panel(draw_population_mean_trace(mt, Dpre, phase_label="pre"),
+            save_panel(draw_population_mean_trace(mt, Dpre0, phase_label="pre"),
                        "Transfer/Population activity", f"POP.mean_tr.pre.{mt}",
                        f"{mt}_population_mean_trace_pre", show_tag)
         except Exception as e:
             print(f"  (skip population mean trace (pre) for {mt}: {e})")
-        if Dpost is not None:
+        if Dpost0 is not None:
             try:
-                save_panel(draw_population_mean_trace(mt, Dpost, phase_label="post"),
+                save_panel(draw_population_mean_trace(mt, Dpost0, phase_label="post"),
                            "Transfer/Population activity", f"POP.mean_tr.post{REV_TAG}.{mt}",
                            f"{mt}_population_mean_trace_post{REV_TAG}", show_tag)
             except Exception as e:
                 print(f"  (skip population mean trace (post) for {mt}: {e})")
-
         try:
-            save_panel(draw_pooled_tuning_heatmap(mt, Dpre, phase_label="pre"),
-                       "Transfer/Subgroups", f"SUB.heatmappool.pre.{mt}",
-                       f"{mt}_pooled_heatmap_pre", show_tag)
-        except Exception as e:
-            print(f"  (skip pooled heatmap (pre) for {mt}: {e})")
-        if Dpost is not None:
-            try:
-                save_panel(draw_pooled_tuning_heatmap(mt, Dpost, phase_label="post"),
-                           "Transfer/Subgroups", f"SUB.heatmappool.post{REV_TAG}.{mt}",
-                           f"{mt}_pooled_heatmap_post{REV_TAG}", show_tag)
-            except Exception as e:
-                print(f"  (skip pooled heatmap (post) for {mt}: {e})")
-
-        try:
-            save_panel(draw_metric_bar(mt, "vigour", Dpre, ylabel="vigour", phase_label="pre"),
+            save_panel(draw_metric_bar(mt, "vigour", Dpre0, ylabel="vigour", phase_label="pre"),
                        "Transfer/Vigour+Value", f"BEH.vigourbar.pre.{mt}",
                        f"{mt}_vigour_bar_pre", show_tag)
         except Exception as e:
             print(f"  (skip vigour bar for {mt}: {e})")
+
+    # Pooled tuning heatmap DOES depend on the responder method (it splits
+    # responders/non-responders via D["responsive"]) -- built once per method.
+    for method in methods:
+        Dpre = _method.load_D(F, MR, FIGURE_DATA_DIR, method)
+        try:
+            Dpost = _method.load_D(F, MR, FIGURE_DATA_REV_DIR, method)
+        except FileNotFoundError as e:
+            Dpost = None
+            print(f"  (skip post-reversal pooled heatmap [{method}]: {e})")
+        for mt in MODEL_TYPES:
+            try:
+                save_panel(draw_pooled_tuning_heatmap(mt, Dpre, phase_label="pre"),
+                           f"Transfer/Subgroups_{method}", f"SUB.heatmappool.pre.{mt}.{method}",
+                           f"{mt}_pooled_heatmap_pre_{method}", show_tag)
+                save_panel(draw_pooled_tuning_heatmap(mt, Dpre, phase_label="pre", exclude_nonresp=True),
+                           f"Transfer/Subgroups_{method}", f"SUB.heatmappoolresp.pre.{mt}.{method}",
+                           f"{mt}_pooled_heatmap_pre_responders_{method}", show_tag)
+            except Exception as e:
+                print(f"  (skip pooled heatmap (pre) for {mt} [{method}]: {e})")
+            if Dpost is not None:
+                try:
+                    save_panel(draw_pooled_tuning_heatmap(mt, Dpost, phase_label="post"),
+                               f"Transfer/Subgroups_{method}", f"SUB.heatmappool.post{REV_TAG}.{mt}.{method}",
+                               f"{mt}_pooled_heatmap_post{REV_TAG}_{method}", show_tag)
+                    save_panel(draw_pooled_tuning_heatmap(mt, Dpost, phase_label="post", exclude_nonresp=True),
+                               f"Transfer/Subgroups_{method}", f"SUB.heatmappoolresp.post{REV_TAG}.{mt}.{method}",
+                               f"{mt}_pooled_heatmap_post{REV_TAG}_responders_{method}", show_tag)
+                except Exception as e:
+                    print(f"  (skip pooled heatmap (post) for {mt} [{method}]: {e})")
 
 
 if __name__ == "__main__":

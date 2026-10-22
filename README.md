@@ -2,7 +2,7 @@
 
 Recurrent neural network (RNN) models of context-dependent value coding.
 
-We train RNNs on context-dependent reward tasks by combining **reinforcement learning** (an actor-critic objective) with **self-supervised learning** (auxiliary prediction losses on the same hidden state, for example stimulus or context identity). The aim is to **recapitulate experimentally observed neural representations and behaviour**: the representational geometry of value and context in the hidden units, and behavioural readouts such as lick vigour and adaptation after reversals. We then ask which training objectives and architectures produce brain-like solutions.
+The core function is idea train RNNs on context-dependent reward tasks by combining **reinforcement learning** (an actor-critic objective) with **self-supervised learning** (auxiliary prediction losses on the same hidden state, for example stimulus or context identity). The aim is to **recapitulate experimentally observed neural representations and behaviour**: the representational geometry of value and context in the hidden units, and behavioural readouts such as lick vigour and adaptation after reversals. We then ask which training objectives and architectures produce brain-like solutions.
 
 ## Repository layout
 
